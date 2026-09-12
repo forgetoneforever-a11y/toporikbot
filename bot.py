@@ -22,8 +22,8 @@ import uvicorn
 TOKEN = "8952197475:AAG5cY8qVLGbu-59TuHZuVWtoKg4KzCwjsQ"
 ADMIN_IDS = [1320294475, 5619340928, 8870678654]
 
-# ЗАМЕНИ "your-app-name" НА СВОЕ ИМЯ БОТА В TELEGRAM (без @)
-BOT_USERNAME = "your_telegram_bot_username"
+# Твой реальный юзернейм бота
+BOT_USERNAME = "toporik18_bot"
 
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://your-app-name.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -33,6 +33,9 @@ PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
+
+# Глобальная переменная для режима технической сложности
+HEAVY_WORK_MODE = False
 
 # Инициализация базы данных SQLite
 conn = sqlite3.connect("bot_database.db", check_same_thread=False)
@@ -257,12 +260,31 @@ def get_admin_keyboard():
     )
 
 
+# АДМИНСКИЕ КОМАНДЫ ДЛЯ РЕЖИМА НАГРУЗКИ
+@router.message(Command("work"))
+async def cmd_work(message: Message):
+    global HEAVY_WORK_MODE
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    HEAVY_WORK_MODE = True
+    await message.answer("⚠️ Режим технической сложности **включен**. Теперь при попытке написать боту пользователи будут получать предупреждение.", parse_mode="Markdown")
+
+
+@router.message(Command("rework"))
+async def cmd_rework(message: Message):
+    global HEAVY_WORK_MODE
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    HEAVY_WORK_MODE = False
+    await message.answer("✅ Режим технической сложности **выключен**. Бот работает в штатном режиме.", parse_mode="Markdown")
+
+
 # Хендлеры бота (с поддержкой глубоких ссылок в /start)
 @router.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject):
     user_id = message.from_user.id
     username = message.from_user.username or "Без юзернейма"
-    args = command.args  # Сюда попадает текст после /start (например, video_5)
+    args = command.args
 
     cursor.execute(
         "INSERT OR IGNORE INTO users (user_id, username, repeat_mode, language) VALUES (?, ?, 1, 'ru')",
@@ -270,7 +292,6 @@ async def cmd_start(message: Message, command: CommandObject):
     )
     conn.commit()
 
-    # Проверяем, перешел ли пользователь по ссылке на конкретное видео
     if args and args.startswith("video_"):
         try:
             video_id = int(args.split("_")[1])
@@ -291,7 +312,6 @@ async def cmd_start(message: Message, command: CommandObject):
                     reply_markup=get_user_keyboard(is_admin, lang)
                 )
 
-                # Автоудаление через 10 секунд (как и для обычных случайных видео)
                 chat_id = message.chat.id
                 async def delete_and_notify():
                     await asyncio.sleep(10)
@@ -314,7 +334,6 @@ async def cmd_start(message: Message, command: CommandObject):
         except Exception:
             pass
 
-    # Стандартный запуск со сменой языка / приветствием
     await message.answer(
         LANG_TEXTS["ru"]["choose_lang"],
         reply_markup=get_language_keyboard(),
@@ -515,6 +534,14 @@ async def admin_reply_to_user(message: Message, bot: Bot):
         await message.answer(f"❌ Не удалось отправить сообщение пользователю. Ошибка: {e}")
 
 
+# ПЕРЕХВАТ ОБЫЧНЫХ СООБЩЕНИЙ (ЕСЛИ ВКЛЮЧЕН РЕЖИМ /work)
+@router.message(F.text)
+async def handle_any_text(message: Message):
+    if HEAVY_WORK_MODE and message.from_user.id not in ADMIN_IDS:
+        await message.answer("⚠️ В данный момент бот может работать технически очень тяжело. Пожалуйста, подождите.")
+        return
+
+
 @router.callback_query(F.data == "random_video")
 async def send_random_video(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -704,7 +731,6 @@ async def manage_videos(callback: CallbackQuery):
         else:
             short_caption = " (Без подписи)"
             
-        # Кнопка для каждого видео открывает меню управления конкретным роликом (удалить / получить ссылку)
         keyboard.append([InlineKeyboardButton(text=f"🎥 Видео #{v_id}{short_caption}", callback_data=f"v_info_{v_id}_{page}")])
 
     nav_buttons = []
@@ -729,7 +755,6 @@ async def manage_videos(callback: CallbackQuery):
     await callback.answer()
 
 
-# Меню управления отдельным видео (получить ссылку / удалить)
 @router.callback_query(F.data.startswith("v_info_"))
 async def video_info_handler(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
