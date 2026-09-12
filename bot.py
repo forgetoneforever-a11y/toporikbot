@@ -73,7 +73,7 @@ class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Клавиатуры (теперь с кнопками "Помощь" и "Связь с админом")
+# Клавиатуры
 def get_user_keyboard(is_admin: bool):
     keyboard = [
         [InlineKeyboardButton(text="🎬 Рандом", callback_data="random_video")],
@@ -99,7 +99,7 @@ def get_admin_keyboard():
     )
 
 
-# Текст справки (вынесем отдельно, чтобы использовать и в команде, и в кнопке)
+# Текст справки
 HELP_TEXT = (
     "<b>📚 Справка по командам бота:</b>\n\n"
     "/random — отправка рандомного видеоматериала\n"
@@ -136,14 +136,12 @@ async def cmd_help(message: Message):
     await message.answer(HELP_TEXT, parse_mode="HTML")
 
 
-# Обработка инлайн-кнопки "Помощь"
 @router.callback_query(F.data == "help_menu")
 async def callback_help(callback: CallbackQuery):
     await callback.message.answer(HELP_TEXT, parse_mode="HTML")
     await callback.answer()
 
 
-# Обработка инлайн-кнопки "Связь с админом"
 @router.callback_query(F.data == "contact_admin")
 async def callback_contact_admin(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("📝 Опишите ошибку или проблему, и мы передадим её администрации:")
@@ -287,9 +285,11 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    # Отправляем видео
-    sent_message = await target_message.answer_video(
-        video=file_id, reply_markup=get_user_keyboard(is_admin)
+    # Отправляем файл с поддержкой стриминга — Telegram автоматически превратит его в полноценный плеер!
+    sent_message = await target_message.answer_document(
+        document=file_id, 
+        supports_streaming=True, 
+        reply_markup=get_user_keyboard(is_admin)
     )
     
     if isinstance(callback, CallbackQuery):
@@ -398,7 +398,7 @@ async def admin_save_video(message: Message, state: FSMContext):
 
         is_admin = message.from_user.id in ADMIN_IDS
         await message.answer(
-            "✅ Видео успешно добавлено в базу данных и будет открываться в полном плеере!",
+            "✅ Видео успешно добавлено в базу данных!",
             reply_markup=get_user_keyboard(is_admin),
         )
         await state.clear()
