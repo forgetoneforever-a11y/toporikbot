@@ -93,6 +93,7 @@ def get_admin_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить новое видео", callback_data="add_video")],
+            [InlineKeyboardButton(text="🗑 Управление базой (Видео)", callback_data="manage_videos_0")],
             [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
             [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
         ]
@@ -285,7 +286,7 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    # Отправляем файл с поддержкой стриминга — Telegram автоматически превратит его в полноценный плеер!
+    # Отправляем как документ со стримингом, чтобы открывалось красиво плеере
     sent_message = await target_message.answer_document(
         document=file_id, 
         supports_streaming=True, 
@@ -346,6 +347,9 @@ async def admin_stats(callback: CallbackQuery):
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
 
+    cursor.execute("SELECT COUNT(*) FROM videos")
+    total_videos = cursor.fetchone()[0]
+
     cursor.execute("SELECT user_id, username FROM users")
     all_users = cursor.fetchall()
 
@@ -356,7 +360,8 @@ async def admin_stats(callback: CallbackQuery):
 
     stats_text = (
         f"📊 <b>Статистика бота:</b>\n\n"
-        f"👥 Всего зарегистрировано пользователей: <b>{total_users}</b>\n\n"
+        f"👥 Всего пользователей: <b>{total_users}</b>\n"
+        f"🎬 Всего видео в базе: <b>{total_videos}</b>\n\n"
         f"<b>Последние пользователи:</b>\n{users_list_str}"
     )
     await callback.message.edit_text(
@@ -368,6 +373,81 @@ async def admin_stats(callback: CallbackQuery):
         ),
         parse_mode="HTML",
     )
+
+
+# Управление базой видео (список с кнопками удаления и пагинацией)
+@router.callback_query(F.data.startswith("manage_videos_"))
+async def manage_videos(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+
+    page = int(callback.data.split("_")[2])
+    per_page = 5  # Количество видео на одной странице
+
+    cursor.execute("SELECT id FROM videos ORDER BY id DESC")
+    all_videos = cursor.fetchall()
+    total_videos = len(all_videos)
+
+    if total_videos == 0:
+        await callback.message.edit_text(
+            "📭 В базе данных пока нет ни одного видео.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")]
+                ]
+            ),
+        )
+        await callback.answer()
+        return
+
+    start_idx = page * per_page
+    end_idx = start_idx + per_page
+    page_videos = all_videos[start_idx:end_idx]
+
+    keyboard = []
+    for (v_id,) in page_videos:
+        keyboard.append([InlineKeyboardButton(text=f"🗑 Удалить видео #{v_id}", callback_data=f"del_video_{v_id}_{page}")])
+
+    # Кнопки пагинации (Назад / Вперед)
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"manage_videos_{page - 1}"))
+    if end_idx < total_videos:
+        nav_buttons.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"manage_videos_{page + 1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    keyboard.append([InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")])
+
+    await callback.message.edit_text(
+        f"🗑 <b>Управление базой видео</b>\nВсего видео в базе: <b>{total_videos}</b>\nВыберите видео для удаления:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# Удаление конкретного видео из базы
+@router.callback_query(F.data.startswith("del_video_"))
+async def delete_video_handler(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+
+    parts = callback.data.split("_")
+    video_id = int(parts[2])
+    page = int(parts[3])
+
+    # Удаляем из таблицы videos и из истории просмотров пользователей
+    cursor.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    cursor.execute("DELETE FROM user_history WHERE video_id = ?", (video_id,))
+    conn.commit()
+
+    await callback.answer(f"✅ Видео #{video_id} успешно удалено из базы!", show_alert=True)
+    
+    # Обновляем список текущей страницы
+    callback.data = f"manage_videos_{page}"
+    await manage_videos(callback)
 
 
 @router.callback_query(F.data == "add_video")
