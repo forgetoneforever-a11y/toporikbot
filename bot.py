@@ -771,6 +771,7 @@ async def video_info_handler(callback: CallbackQuery):
         return
 
     caption = row[0] or "Без подписи"
+    # Теперь используется правильная переменная BOT_USERNAME
     deep_link = f"https://t.me/{BOT_USERNAME}?start=video_{video_id}"
 
     text = (
