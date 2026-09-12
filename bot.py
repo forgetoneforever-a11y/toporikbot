@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import random
@@ -19,14 +20,10 @@ import uvicorn
 TOKEN = "8952197475:AAG5cY8qVLGbu-59TuHZuVWtoKg4KzCwjsQ"
 ADMIN_IDS = [1320294475, 5619340928, 8870678654]
 
-# URL твоего сервиса на Render (обязательно укажи его без слэша на конце после деплоя,
-# например: "https://toporikbot.onrender.com")
-# Render автоматически прокидывает переменную RENDER_EXTERNAL_URL
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://your-app-name.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
-# Порт, который выделяет Render
 PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
@@ -266,11 +263,38 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    await target_message.answer_video(
+    # Отправляем видео
+    sent_message = await target_message.answer_video(
         video=file_id, reply_markup=get_user_keyboard(is_admin)
     )
+    
     if isinstance(callback, CallbackQuery):
         await callback.answer()
+
+    # Фоновая задача на удаление видео через 10 секунд и отправку уведомления
+    bot_instance = callback.bot if isinstance(callback, CallbackQuery) else target_message.bot
+    chat_id = target_message.chat.id
+
+    async def delete_and_notify():
+        await asyncio.sleep(10)
+        try:
+            # Удаляем отправленное видео
+            await bot_instance.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
+        except Exception:
+            pass  # Если пользователь сам уже удалил или истек срок
+        
+        # Отправляем подсказку о просмотре в избранном
+        try:
+            await bot_instance.send_message(
+                chat_id=chat_id,
+                text="💡 <b>Рекомендуем пересылать понравившиеся видео в Избранное</b>, так как это сообщение было удалено через 10 секунд!",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+    # Запускаем задачу в фоновом режиме
+    asyncio.create_task(delete_and_notify())
 
 
 @router.callback_query(F.data == "admin_panel")
@@ -364,7 +388,6 @@ dp.include_router(router)
 
 @app.on_event("startup")
 async def on_startup():
-    # Установка вебхука при старте приложения
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook успешно установлен на: {WEBHOOK_URL}")
 
@@ -376,7 +399,6 @@ async def on_shutdown():
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
-    # Прием входящих запросов от Telegram
     from aiogram.types import Update
     update_data = await request.json()
     update = Update.model_validate(update_data, context={"bot": bot})
@@ -386,7 +408,6 @@ async def bot_webhook(request: Request):
 
 @app.get("/")
 async def index():
-    # Эндпоинт для пинг-сервисов (чтобы сайт не засыпал)
     return {"status": "Bot is alive!"}
 
 
