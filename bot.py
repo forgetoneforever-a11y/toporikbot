@@ -263,7 +263,7 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    # Отправляем видео
+    # Отправляем видео как нормальный видеофайл (развернутым)
     sent_message = await target_message.answer_video(
         video=file_id, reply_markup=get_user_keyboard(is_admin)
     )
@@ -271,19 +271,17 @@ async def send_random_video(callback: CallbackQuery):
     if isinstance(callback, CallbackQuery):
         await callback.answer()
 
-    # Фоновая задача на удаление видео через 10 секунд и отправку уведомления
+    # Таймер на удаление видео через 10 секунд и уведомление про избранное
     bot_instance = callback.bot if isinstance(callback, CallbackQuery) else target_message.bot
     chat_id = target_message.chat.id
 
     async def delete_and_notify():
         await asyncio.sleep(10)
         try:
-            # Удаляем отправленное видео
             await bot_instance.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
         except Exception:
-            pass  # Если пользователь сам уже удалил или истек срок
+            pass
         
-        # Отправляем подсказку о просмотре в избранном
         try:
             await bot_instance.send_message(
                 chat_id=chat_id,
@@ -293,7 +291,6 @@ async def send_random_video(callback: CallbackQuery):
         except Exception:
             pass
 
-    # Запускаем задачу в фоновом режиме
     asyncio.create_task(delete_and_notify())
 
 
@@ -354,29 +351,44 @@ async def admin_add_video_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         return
     await callback.message.answer(
-        "📤 Отправьте видеоматериал (видео файлом), который хотите добавить в базу:"
+        "📤 Отправьте видеоматериалы (можно сразу несколько файлов или видео, сжатые и несжатые), которые хотите добавить в базу:"
     )
     await state.set_state(AdminStates.waiting_for_video)
     await callback.answer()
 
 
-@router.message(AdminStates.waiting_for_video, F.video)
+# Сохранение видео (поддерживает обычные видео, видео в виде файлов/документов, а также пачки)
+@router.message(AdminStates.waiting_for_video, F.video | F.document)
 async def admin_save_video(message: Message, state: FSMContext):
-    file_id = message.video.file_id
-    cursor.execute("INSERT INTO videos (file_id) VALUES (?)", (file_id,))
-    conn.commit()
+    file_id = None
+    
+    # Если отправлено как обычное видео
+    if message.video:
+        file_id = message.video.file_id
+    # Если отправлено как файл (документ), проверяем, что это видео по расширению или типу
+    elif message.document:
+        if message.document.mime_type and "video" in message.document.mime_type:
+            file_id = message.document.file_id
+        elif message.document.file_name and message.document.file_name.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
+            file_id = message.document.file_id
 
-    is_admin = message.from_user.id in ADMIN_IDS
-    await message.answer(
-        "✅ Видео успешно добавлено в базу данных!",
-        reply_markup=get_user_keyboard(is_admin),
-    )
-    await state.clear()
+    if file_id:
+        cursor.execute("INSERT INTO videos (file_id) VALUES (?)", (file_id,))
+        conn.commit()
+
+        is_admin = message.from_user.id in ADMIN_IDS
+        await message.answer(
+            "✅ Видео успешно добавлено в базу данных и будет открываться в полном плеере!",
+            reply_markup=get_user_keyboard(is_admin),
+        )
+        await state.clear()
+    else:
+        await message.answer("❌ Этот файл не похож на видео. Пожалуйста, отправьте видеофайл.")
 
 
 @router.message(AdminStates.waiting_for_video)
 async def admin_wrong_video_type(message: Message):
-    await message.answer("❌ Пожалуйста, отправьте именно видеофайл.")
+    await message.answer("❌ Пожалуйста, отправьте видео или видеофайл.")
 
 
 # Инициализация FastAPI и Aiogram для Web Service
