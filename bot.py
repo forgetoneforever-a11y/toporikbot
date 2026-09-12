@@ -286,7 +286,7 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    # Отправляем как документ со стримингом, чтобы открывалось красиво плеере
+    # Отправляем как документ со стримингом, чтобы открывалось в плеере
     sent_message = await target_message.answer_document(
         document=file_id, 
         supports_streaming=True, 
@@ -519,6 +519,7 @@ async def bot_webhook(request: Request):
 
 
 @app.get("/")
+@app.head("/")
 async def index():
     return {"status": "Bot is alive!"}
 
