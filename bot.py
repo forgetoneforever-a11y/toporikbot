@@ -37,8 +37,10 @@ router = Router()
 # Глобальная переменная для режима технической сложности
 HEAVY_WORK_MODE = False
 
-# Инициализация базы данных SQLite
+# Инициализация базы данных SQLite с оптимизациями (WAL-режим)
 conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+conn.execute("PRAGMA journal_mode = WAL;")
+conn.execute("PRAGMA synchronous = NORMAL;")
 cursor = conn.cursor()
 
 cursor.execute(
@@ -83,6 +85,10 @@ CREATE TABLE IF NOT EXISTS user_history (
 )
 """
 )
+
+# Создаем индексы для ускорения работы базы данных
+cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_lang ON users(language);")
+cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user_id);")
 conn.commit()
 
 
@@ -96,7 +102,7 @@ class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Тексты и оформление для разных языков
+# Тексты и оформление для разных языков (время удаления изменено на 25 секунд)
 LANG_TEXTS = {
     "ru": {
         "welcome": (
@@ -123,7 +129,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 В базе данных пока нет ни одного видеоматериала!",
-        "video_deleted_warn": "💡 <b>Совет:</b> рекомендуем пересылать понравившиеся ролики в «Избранное», так как это сообщение автоматически удалится через 10 секунд!",
+        "video_deleted_warn": "💡 <b>Совет:</b> рекомендуем пересылать понравившиеся ролики в «Избранное», так как это сообщение автоматически удалится через 25 секунд!",
     },
     "en": {
         "welcome": (
@@ -150,7 +156,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 There are no videos in the database yet!",
-        "video_deleted_warn": "💡 <b>Tip:</b> we recommend forwarding favorite videos to Saved Messages, as this message will be deleted after 10 seconds!",
+        "video_deleted_warn": "💡 <b>Tip:</b> we recommend forwarding favorite videos to Saved Messages, as this message will be deleted after 25 seconds!",
     },
     "uk": {
         "welcome": (
@@ -177,7 +183,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 У базі даних поки немає жодного відео!",
-        "video_deleted_warn": "💡 <b>Порада:</b> рекомендуємо пересилати вподобані ролики в «Збережене», оскільки це повідомлення видалиться через 10 секунд!",
+        "video_deleted_warn": "💡 <b>Порада:</b> рекомендуємо пересилати вподобані ролики в «Збережене», оскільки це повідомлення видалиться через 25 секунд!",
     },
     "kk": {
         "welcome": (
@@ -204,7 +210,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 Дерекқорда әзірге видеолар жоқ!",
-        "video_deleted_warn": "💡 <b>Кеңес:</b> ұнаған видеоларды Таңдаулыларға жіберуге кеңес береміз, себебі бұл хабарлама 10 секундтан кейін өшіріледі!",
+        "video_deleted_warn": "💡 <b>Кеңес:</b> ұнаған видеоларды Таңдаулыларға жіберуге кеңес береміз, себебі бұл хабарлама 25 секундтан кейін өшіріледі!",
     },
 }
 
@@ -314,7 +320,7 @@ async def cmd_start(message: Message, command: CommandObject):
 
                 chat_id = message.chat.id
                 async def delete_and_notify():
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(25)  # Таймер изменен на 25 секунд
                     try:
                         await message.bot.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
                     except Exception:
@@ -610,7 +616,7 @@ async def send_random_video(callback: CallbackQuery):
     chat_id = target_message.chat.id
 
     async def delete_and_notify():
-        await asyncio.sleep(10)
+        await asyncio.sleep(25)  # Таймер изменен на 25 секунд
         try:
             await bot_instance.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
         except Exception:
@@ -771,7 +777,6 @@ async def video_info_handler(callback: CallbackQuery):
         return
 
     caption = row[0] or "Без подписи"
-    # Теперь используется правильная переменная BOT_USERNAME
     deep_link = f"https://t.me/{BOT_USERNAME}?start=video_{video_id}"
 
     text = (
