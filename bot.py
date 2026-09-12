@@ -102,7 +102,7 @@ class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Тексты и оформление для разных языков
+# Тексты и оформление для разных языков (указываем в тексте совета 25 секунд)
 LANG_TEXTS = {
     "ru": {
         "welcome": (
@@ -129,7 +129,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 В базе данных пока нет ни одного видеоматериала!",
-        "video_deleted_warn": "💡 <b>Совет:</b> рекомендуем пересылать понравившиеся ролики в «Избранное»!",
+        "video_deleted_warn": "💡 <b>Совет:</b> рекомендуем пересылать понравившиеся ролики в «Избранное», так как это сообщение автоматически удалится через 25 секунд!",
     },
     "en": {
         "welcome": (
@@ -156,7 +156,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 There are no videos in the database yet!",
-        "video_deleted_warn": "💡 <b>Tip:</b> we recommend forwarding favorite videos to Saved Messages!",
+        "video_deleted_warn": "💡 <b>Tip:</b> we recommend forwarding favorite videos to Saved Messages, as this message will be deleted after 25 seconds!",
     },
     "uk": {
         "welcome": (
@@ -183,7 +183,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 У базі даних поки немає жодного відео!",
-        "video_deleted_warn": "💡 <b>Порада:</b> рекомендуємо пересилати вподобані ролики в «Збережене»!",
+        "video_deleted_warn": "💡 <b>Порада:</b> рекомендуємо пересилати вподобані ролики в «Збережене», оскільки це повідомлення видалиться через 25 секунд!",
     },
     "kk": {
         "welcome": (
@@ -210,7 +210,7 @@ LANG_TEXTS = {
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 Дерекқорда әзірге видеолар жоқ!",
-        "video_deleted_warn": "💡 <b>Кеңес:</b> ұнаған видеоларды Таңдаулыларға жіберуге кеңес береміз!",
+        "video_deleted_warn": "💡 <b>Кеңес:</b> ұнаған видеоларды Таңдаулыларға жіберуге кеңес береміз, себебі бұл хабарлама 25 секундтан кейін өшіріледі!",
     },
 }
 
@@ -310,8 +310,10 @@ async def cmd_start(message: Message, command: CommandObject):
                 t = LANG_TEXTS[lang]
                 is_admin = user_id in ADMIN_IDS
 
-                # Отправляем видео (оно остается в чате навсегда)
-                await message.answer_document(
+                chat_id = message.chat.id
+
+                # 1. Отправляем видео (удаление через 10 секунд)
+                sent_video = await message.answer_document(
                     document=file_id,
                     caption=caption,
                     parse_mode="HTML",
@@ -319,8 +321,16 @@ async def cmd_start(message: Message, command: CommandObject):
                     reply_markup=get_user_keyboard(is_admin, lang)
                 )
 
-                # Отправляем вспомогательное сообщение с советом, которое удалится через 25 секунд
-                chat_id = message.chat.id
+                async def delete_video():
+                    await asyncio.sleep(10)
+                    try:
+                        await message.bot.delete_message(chat_id=chat_id, message_id=sent_video.message_id)
+                    except Exception:
+                        pass
+
+                asyncio.create_task(delete_video())
+
+                # 2. Отправляем сообщение с советом (удаление через 25 секунд)
                 warn_msg = await message.answer(
                     text=t["video_deleted_warn"],
                     parse_mode="HTML"
@@ -600,9 +610,11 @@ async def send_random_video(callback: CallbackQuery):
 
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
+    bot_instance = callback.bot if isinstance(callback, CallbackQuery) else target_message.bot
+    chat_id = target_message.chat.id
     
-    # Отправляем само видео (оно больше не удаляется и остается у пользователя)
-    await target_message.answer_document(
+    # 1. Отправляем видео (автоудаление через 10 секунд)
+    sent_video = await target_message.answer_document(
         document=file_id, 
         caption=caption,
         parse_mode="HTML",
@@ -613,10 +625,16 @@ async def send_random_video(callback: CallbackQuery):
     if isinstance(callback, CallbackQuery):
         await callback.answer()
 
-    bot_instance = callback.bot if isinstance(callback, CallbackQuery) else target_message.bot
-    chat_id = target_message.chat.id
+    async def delete_video():
+        await asyncio.sleep(10)
+        try:
+            await bot_instance.delete_message(chat_id=chat_id, message_id=sent_video.message_id)
+        except Exception:
+            pass
 
-    # Отправляем предупреждение/совет, которое удалится через 25 секунд, чтобы не было спама
+    asyncio.create_task(delete_video())
+
+    # 2. Отправляем предупреждение/совет (автоудаление через 25 секунд)
     warn_msg = await bot_instance.send_message(
         chat_id=chat_id,
         text=t["video_deleted_warn"],
