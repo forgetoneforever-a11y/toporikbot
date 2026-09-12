@@ -2,10 +2,11 @@ import asyncio
 import logging
 import os
 import random
+import re
 import sqlite3
 from contextlib import asynccontextmanager
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -20,6 +21,9 @@ import uvicorn
 # НАСТРОЙКИ БОТА И АДМИНЫ
 TOKEN = "8952197475:AAG5cY8qVLGbu-59TuHZuVWtoKg4KzCwjsQ"
 ADMIN_IDS = [1320294475, 5619340928, 8870678654]
+
+# ЗАМЕНИ "your-app-name" НА СВОЕ ИМЯ БОТА В TELEGRAM (без @)
+BOT_USERNAME = "your_telegram_bot_username"
 
 WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://your-app-name.onrender.com")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -253,11 +257,12 @@ def get_admin_keyboard():
     )
 
 
-# Хендлеры бота
+# Хендлеры бота (с поддержкой глубоких ссылок в /start)
 @router.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, command: CommandObject):
     user_id = message.from_user.id
     username = message.from_user.username or "Без юзернейма"
+    args = command.args  # Сюда попадает текст после /start (например, video_5)
 
     cursor.execute(
         "INSERT OR IGNORE INTO users (user_id, username, repeat_mode, language) VALUES (?, ?, 1, 'ru')",
@@ -265,6 +270,51 @@ async def cmd_start(message: Message):
     )
     conn.commit()
 
+    # Проверяем, перешел ли пользователь по ссылке на конкретное видео
+    if args and args.startswith("video_"):
+        try:
+            video_id = int(args.split("_")[1])
+            cursor.execute("SELECT file_id, caption FROM videos WHERE id = ?", (video_id,))
+            video_data = cursor.fetchone()
+
+            if video_data:
+                file_id, caption = video_data
+                lang = get_user_lang(user_id)
+                t = LANG_TEXTS[lang]
+                is_admin = user_id in ADMIN_IDS
+
+                sent_message = await message.answer_document(
+                    document=file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    supports_streaming=True,
+                    reply_markup=get_user_keyboard(is_admin, lang)
+                )
+
+                # Автоудаление через 10 секунд (как и для обычных случайных видео)
+                chat_id = message.chat.id
+                async def delete_and_notify():
+                    await asyncio.sleep(10)
+                    try:
+                        await message.bot.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
+                    except Exception:
+                        pass
+                    try:
+                        await message.bot.send_message(
+                            chat_id=chat_id,
+                            text=t["video_deleted_warn"],
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+                asyncio.create_task(delete_and_notify())
+                return
+            else:
+                await message.answer("❌ К сожалению, это видео было удалено или не существует.")
+        except Exception:
+            pass
+
+    # Стандартный запуск со сменой языка / приветствием
     await message.answer(
         LANG_TEXTS["ru"]["choose_lang"],
         reply_markup=get_language_keyboard(),
@@ -433,6 +483,36 @@ async def process_report(message: Message, state: FSMContext, bot: Bot):
 
     await message.answer("✅ Ваше сообщение успешно передано администрации. Спасибо за обратную связь!")
     await state.clear()
+
+
+# ФУНКЦИЯ ОТВЕТА АДМИНА ЧЕРЕЗ REPLY (ОТВЕТИТЬ)
+@router.message(F.reply_to_message)
+async def admin_reply_to_user(message: Message, bot: Bot):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    reply_msg = message.reply_to_message
+    if not reply_msg or not reply_msg.text:
+        return
+
+    match = re.search(r"ID:\s*(\d+)", reply_msg.text)
+    if not match:
+        return
+
+    target_user_id = int(match.group(1))
+    admin_answer = message.text
+
+    try:
+        await bot.send_message(
+            chat_id=target_user_id,
+            text=f"💬 <b>Ответ от администрации:</b>\n"
+                 f"━━━━━━━━━━━━━━━━━━━\n"
+                 f"{admin_answer}",
+            parse_mode="HTML"
+        )
+        await message.react([{"type": "emoji", "emoji": "👍"}])
+    except Exception as e:
+        await message.answer(f"❌ Не удалось отправить сообщение пользователю. Ошибка: {e}")
 
 
 @router.callback_query(F.data == "random_video")
@@ -624,7 +704,8 @@ async def manage_videos(callback: CallbackQuery):
         else:
             short_caption = " (Без подписи)"
             
-        keyboard.append([InlineKeyboardButton(text=f"🗑 Видео #{v_id}{short_caption}", callback_data=f"del_video_{v_id}_{page}")])
+        # Кнопка для каждого видео открывает меню управления конкретным роликом (удалить / получить ссылку)
+        keyboard.append([InlineKeyboardButton(text=f"🎥 Видео #{v_id}{short_caption}", callback_data=f"v_info_{v_id}_{page}")])
 
     nav_buttons = []
     if page > 0:
@@ -641,10 +722,48 @@ async def manage_videos(callback: CallbackQuery):
         f"🗑 <b>Управление базой видео</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"Всего видео в базе: <b>{total_videos}</b>\n"
-        f"Выберите ролик для удаления:",
+        f"Выберите ролик для управления:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode="HTML"
     )
+    await callback.answer()
+
+
+# Меню управления отдельным видео (получить ссылку / удалить)
+@router.callback_query(F.data.startswith("v_info_"))
+async def video_info_handler(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+
+    parts = callback.data.split("_")
+    video_id = int(parts[2])
+    page = int(parts[3])
+
+    cursor.execute("SELECT caption FROM videos WHERE id = ?", (video_id,))
+    row = cursor.fetchone()
+    if not row:
+        await callback.answer("❌ Видео не найдено!", show_alert=True)
+        return
+
+    caption = row[0] or "Без подписи"
+    deep_link = f"https://t.me/{BOT_USERNAME}?start=video_{video_id}"
+
+    text = (
+        f"🎬 <b>Видео #{video_id}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📝 <b>Подпись:</b> {caption}\n\n"
+        f"🔗 <b>Прямая ссылка на видео:</b>\n"
+        f"<code>{deep_link}</code>"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Удалить это видео", callback_data=f"del_video_{video_id}_{page}")],
+            [InlineKeyboardButton(text="◀️ Назад к списку", callback_data=f"manage_videos_{page}")]
+        ]
+    )
+
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
@@ -769,7 +888,6 @@ dp.include_router(router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Действия при запуске веб-сервиса
     try:
         await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
         logging.info(f"✅ Вебхук успешно установлен на: {WEBHOOK_URL}")
@@ -778,7 +896,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Действия при выключении
     try:
         await bot.session.close()
         logging.info("🛑 Сессия бота закрыта.")
