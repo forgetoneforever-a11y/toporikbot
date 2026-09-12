@@ -1,5 +1,5 @@
-import asyncio
 import logging
+import os
 import random
 import sqlite3
 from aiogram import Bot, Dispatcher, F, Router
@@ -12,10 +12,22 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from fastapi import FastAPI, Request
+import uvicorn
 
-# НАСТРОЙКИ БОТА И ОБНОВЛЕННЫЕ АДМИНЫ
+# НАСТРОЙКИ БОТА И АДМИНЫ
 TOKEN = "8952197475:AAG5cY8qVLGbu-59TuHZuVWtoKg4KzCwjsQ"
-ADMIN_IDS = [1320294475, 5619340928, 8870678654]  # Новые ID администраторов
+ADMIN_IDS = [1320294475, 5619340928, 8870678654]
+
+# URL твоего сервиса на Render (обязательно укажи его без слэша на конце после деплоя,
+# например: "https://toporikbot.onrender.com")
+# Render автоматически прокидывает переменную RENDER_EXTERNAL_URL
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL", "https://your-app-name.onrender.com")
+WEBHOOK_PATH = f"/webhook/{TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+# Порт, который выделяет Render
+PORT = int(os.getenv("PORT", 8000))
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
@@ -55,7 +67,7 @@ CREATE TABLE IF NOT EXISTS user_history (
 conn.commit()
 
 
-# Состояния для FSM (добавление видео и репорт)
+# Состояния для FSM
 class AdminStates(StatesGroup):
     waiting_for_video = State()
 
@@ -64,7 +76,7 @@ class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Главная клавиатура для пользователя
+# Клавиатуры
 def get_user_keyboard(is_admin: bool):
     keyboard = [[InlineKeyboardButton(text="🎬 Рандом", callback_data="random_video")]]
     if is_admin:
@@ -74,7 +86,6 @@ def get_user_keyboard(is_admin: bool):
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-# Клавиатура админ-панели
 def get_admin_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -85,14 +96,13 @@ def get_admin_keyboard():
     )
 
 
-# Старт и регистрация
+# Хендлеры бота
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     username = message.from_user.username or "Без юзернейма"
     name = message.from_user.first_name
 
-    # Регистрация пользователя в БД
     cursor.execute(
         "INSERT OR IGNORE INTO users (user_id, username, repeat_mode) VALUES (?, ?, 1)",
         (user_id, username),
@@ -108,7 +118,6 @@ async def cmd_start(message: Message):
     await message.answer(text, reply_markup=get_user_keyboard(is_admin), parse_mode="HTML")
 
 
-# Команда /help
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     help_text = (
@@ -121,7 +130,6 @@ async def cmd_help(message: Message):
     await message.answer(help_text, parse_mode="HTML")
 
 
-# Команда /random (текстовая команда)
 @router.message(Command("random"))
 async def cmd_random_text(message: Message):
     fake_callback = CallbackQuery(
@@ -134,7 +142,6 @@ async def cmd_random_text(message: Message):
     await send_random_video(fake_callback)
 
 
-# Команда /setting (Настройки)
 @router.message(Command("setting"))
 async def cmd_setting(message: Message):
     user_id = message.from_user.id
@@ -155,7 +162,6 @@ async def cmd_setting(message: Message):
     await message.answer("⚙️ <b>Настройки бота:</b>", reply_markup=keyboard, parse_mode="HTML")
 
 
-# Переключение режима повтора
 @router.callback_query(F.data == "toggle_repeat")
 async def toggle_repeat_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -184,7 +190,6 @@ async def toggle_repeat_handler(callback: CallbackQuery):
     await callback.answer("Настройки обновлены!")
 
 
-# Команда /report
 @router.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
     await message.answer("📝 Опишите ошибку или проблему, и мы передадим её администрации:")
@@ -211,7 +216,6 @@ async def process_report(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
 
 
-# Логика выдачи рандомного видео
 @router.callback_query(F.data == "random_video")
 async def send_random_video(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -269,7 +273,6 @@ async def send_random_video(callback: CallbackQuery):
         await callback.answer()
 
 
-# АДМИН-ПАНЕЛЬ
 @router.callback_query(F.data == "admin_panel")
 async def admin_panel_handler(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -302,7 +305,7 @@ async def admin_stats(callback: CallbackQuery):
     all_users = cursor.fetchall()
 
     users_list_str = ""
-    for u_id, u_name in all_users[-15:]:  # Показываем последних 15 пользователей
+    for u_id, u_name in all_users[-15:]:
         uname_display = f"@{u_name}" if u_name != "Без юзернейма" else "Без юзернейма"
         users_list_str += f"• {uname_display} (ID: <code>{u_id}</code>)\n"
 
@@ -352,16 +355,40 @@ async def admin_wrong_video_type(message: Message):
     await message.answer("❌ Пожалуйста, отправьте именно видеофайл.")
 
 
-# Запуск бота
-async def main():
-    bot = Bot(token=TOKEN)
-    dp = Dispatcher()
-    dp.include_router(router)
+# Инициализация FastAPI и Aiogram для Web Service
+app = FastAPI()
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+dp.include_router(router)
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    print("Бот успешно запущен!")
-    await dp.start_polling(bot)
+
+@app.on_event("startup")
+async def on_startup():
+    # Установка вебхука при старте приложения
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook успешно установлен на: {WEBHOOK_URL}")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.session.close()
+
+
+@app.post(WEBHOOK_PATH)
+async def bot_webhook(request: Request):
+    # Прием входящих запросов от Telegram
+    from aiogram.types import Update
+    update_data = await request.json()
+    update = Update.model_validate(update_data, context={"bot": bot})
+    await dp.feed_update(bot, update)
+    return {"status": "ok"}
+
+
+@app.get("/")
+async def index():
+    # Эндпоинт для пинг-сервисов (чтобы сайт не засыпал)
+    return {"status": "Bot is alive!"}
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run("bot:app", host="0.0.0.0", port=PORT)
