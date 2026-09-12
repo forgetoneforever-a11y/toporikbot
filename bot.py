@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import sqlite3
+from contextlib import asynccontextmanager
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -761,30 +762,41 @@ async def admin_save_video_no_caption(callback: CallbackQuery, state: FSMContext
     await callback.answer()
 
 
-# Инициализация FastAPI и Aiogram для Web Service
-app = FastAPI()
+# Инициализация бота и FastAPI с современным lifespan-менеджером
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 dp.include_router(router)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Действия при запуске веб-сервиса
+    try:
+        await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+        logging.info(f"✅ Вебхук успешно установлен на: {WEBHOOK_URL}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при установке вебхука: {e}")
+    
+    yield
+    
+    # Действия при выключении
+    try:
+        await bot.session.close()
+        logging.info("🛑 Сессия бота закрыта.")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при закрытии сессии: {e}")
 
-@app.on_event("startup")
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook успешно установлен на: {WEBHOOK_URL}")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await bot.session.close()
+app = FastAPI(lifespan=lifespan)
 
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
     from aiogram.types import Update
-    update_data = await request.json()
-    update = Update.model_validate(update_data, context={"bot": bot})
-    await dp.feed_update(bot, update)
+    try:
+        update_data = await request.json()
+        update = Update.model_validate(update_data, context={"bot": bot})
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logging.error(f"❌ Ошибка обработки апдейта от Telegram: {e}")
     return {"status": "ok"}
 
 
