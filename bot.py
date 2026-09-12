@@ -44,21 +44,27 @@ CREATE TABLE IF NOT EXISTS users (
 """
 )
 
-# Проверка на случай, если таблица users уже существовала без колонки language
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'ru'")
     conn.commit()
 except sqlite3.OperationalError:
-    pass  # Колонка уже есть
+    pass
 
 cursor.execute(
     """
 CREATE TABLE IF NOT EXISTS videos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_id TEXT
+    file_id TEXT,
+    caption TEXT
 )
 """
 )
+
+try:
+    cursor.execute("ALTER TABLE videos ADD COLUMN caption TEXT")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
 
 cursor.execute(
     """
@@ -75,89 +81,122 @@ conn.commit()
 # Состояния для FSM
 class AdminStates(StatesGroup):
     waiting_for_video = State()
+    waiting_for_caption = State()
 
 
 class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Тексты для разных языков
+# Тексты и оформление для разных языков
 LANG_TEXTS = {
     "ru": {
-        "welcome": "<b>{name}</b>, добрый день!\nПрочтите нашу осведомительную информацию /help!\nЭто очень важный процесс!",
-        "choose_lang": "🌍 Пожалуйста, выберите язык / Please choose your language:",
+        "welcome": (
+            "✨ <b>Добро пожаловать, {name}!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🎬 Рады видеть вас в нашем боте.\n"
+            "📌 Пожалуйста, обязательно ознакомьтесь с разделом помощи /help перед началом работы!\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        ),
+        "choose_lang": "🌍 <b>Выберите язык интерфейса</b>\nChoose your preferred language:",
         "lang_changed": "✅ Язык успешно изменен на русский!",
-        "btn_random": "🎬 Рандом",
+        "btn_random": "🎬 Смотреть случайное видео",
         "btn_help": "🆘 Помощь",
         "btn_contact": "💬 Связь с админом",
-        "btn_admin": "🛠 Админ панель",
+        "btn_admin": "🛠 Админ-панель",
         "help_text": (
-            "<b>📚 Справка по командам бота:</b>\n\n"
-            "/random — отправка рандомного видеоматериала\n"
-            "/setting — настройки бота (вкл/выкл повторение видео)\n"
-            "/language — сменить язык / Change language\n"
-            "/report — отправить ошибку администрации\n"
-            "/help — помощь и список команд"
+            "📚 <b>Справочник по командам бота:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "• /random — получить случайный видеоматериал\n"
+            "• /setting — персональные настройки (вкл/выкл повтор)\n"
+            "• /language — сменить язык интерфейса\n"
+            "• /report — отправить сообщение администрации\n"
+            "• /help — вызвать эту справку\n"
+            "━━━━━━━━━━━━━━━━━━━"
         ),
-        "no_videos": "В базе данных пока нет ни одного видео!",
-        "video_deleted_warn": "💡 <b>Рекомендуем пересылать понравившиеся видео в Избранное</b>, так как это сообщение было удалено через 10 секунд!",
+        "no_videos": "📭 В базе данных пока нет ни одного видеоматериала!",
+        "video_deleted_warn": "💡 <b>Совет:</b> рекомендуем пересылать понравившиеся ролики в «Избранное», так как это сообщение автоматически удалится через 10 секунд!",
     },
     "en": {
-        "welcome": "Hello <b>{name}</b>!\nPlease read our information via /help!\nThis is very important!",
-        "choose_lang": "🌍 Please choose your language:",
+        "welcome": (
+            "✨ <b>Welcome, {name}!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🎬 Glad to see you here.\n"
+            "📌 Please read the help section via /help before getting started!\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        ),
+        "choose_lang": "🌍 <b>Please choose your language:</b>",
         "lang_changed": "✅ Language successfully changed to English!",
-        "btn_random": "🎬 Random",
+        "btn_random": "🎬 Watch Random Video",
         "btn_help": "🆘 Help",
         "btn_contact": "💬 Contact Admin",
         "btn_admin": "🛠 Admin Panel",
         "help_text": (
-            "<b>📚 Bot Commands Help:</b>\n\n"
-            "/random — send a random video\n"
-            "/setting — bot settings (enable/disable video repeat)\n"
-            "/language — change language\n"
-            "/report — report an issue to administration\n"
-            "/help — help and list of commands"
+            "📚 <b>Bot Commands Guide:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "• /random — send a random video\n"
+            "• /setting — bot settings (enable/disable repeats)\n"
+            "• /language — change language\n"
+            "• /report — report an issue to admin\n"
+            "• /help — show commands help\n"
+            "━━━━━━━━━━━━━━━━━━━"
         ),
-        "no_videos": "There are no videos in the database yet!",
-        "video_deleted_warn": "💡 <b>We recommend forwarding favorite videos to Saved Messages</b>, as this message was deleted after 10 seconds!",
+        "no_videos": "📭 There are no videos in the database yet!",
+        "video_deleted_warn": "💡 <b>Tip:</b> we recommend forwarding favorite videos to Saved Messages, as this message will be deleted after 10 seconds!",
     },
     "uk": {
-        "welcome": "Вітаємо, <b>{name}</b>!\nПрочитайте нашу інформацію за командою /help!\nЦе дуже важливий процес!",
-        "choose_lang": "🌍 Будь ласка, виберіть мову:",
+        "welcome": (
+            "✨ <b>Вітаємо, {name}!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🎬 Раді бачити вас у нашому боті.\n"
+            "📌 Будь ласка, прочитайте довідку за командою /help перед початком!\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        ),
+        "choose_lang": "🌍 <b>Будь ласка, виберіть мову:</b>",
         "lang_changed": "✅ Мову успішно змінено на українську!",
-        "btn_random": "🎬 Випадкове",
+        "btn_random": "🎬 Випадкове відео",
         "btn_help": "🆘 Допомога",
         "btn_contact": "💬 Зв'язок з адміном",
-        "btn_admin": "🛠 Адмін панель",
+        "btn_admin": "🛠 Адмін-панель",
         "help_text": (
-            "<b>📚 Довідка по командах бота:</b>\n\n"
-            "/random — відправка випадкового відео\n"
-            "/setting — налаштування бота (увімк/вимк повторення відео)\n"
-            "/language — змінити мову\n"
-            "/report — надіслати помилку адміністрації\n"
-            "/help — допомога та список команд"
+            "📚 <b>Довідник по командах бота:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "• /random — надіслати випадкове відео\n"
+            "• /setting — налаштування (увімк/вимк повторення)\n"
+            "• /language — змінити мову\n"
+            "• /report — надіслати помилку адміністрації\n"
+            "• /help — допомога та список команд\n"
+            "━━━━━━━━━━━━━━━━━━━"
         ),
-        "no_videos": "У базі даних поки немає жодного відео!",
-        "video_deleted_warn": "💡 <b>Рекомендуємо пересилати вподобані відео в Збережене (Обране)</b>, оскільки це повідомлення було видалено через 10 секунд!",
+        "no_videos": "📭 У базі даних поки немає жодного відео!",
+        "video_deleted_warn": "💡 <b>Порада:</b> рекомендуємо пересилати вподобані ролики в «Збережене», оскільки це повідомлення видалиться через 10 секунд!",
     },
     "kk": {
-        "welcome": "Қайырлы күн, <b>{name}</b>!\n/help арқылы ақпаратпен танысыңыз!\nБұл өте маңызды процесс!",
-        "choose_lang": "🌍 Тілді таңдаңыз / Please choose your language:",
+        "welcome": (
+            "✨ <b>Қош келдіңіз, {name}!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🎬 Ботқа қош келдіңіз.\n"
+            "📌 Бастамас бұрын /help арқылы анықтамамен танысуыңызды сұраймыз!\n"
+            "━━━━━━━━━━━━━━━━━━━"
+        ),
+        "choose_lang": "🌍 <b>Тілді таңдаңыз / Choose language:</b>",
         "lang_changed": "✅ Тіл қазақ тіліне сәтті ауыстырылды!",
-        "btn_random": "🎬 Кездейсоқ",
+        "btn_random": "🎬 Кездейсоқ видео",
         "btn_help": "🆘 Көмек",
         "btn_contact": "💬 Әкімшімен байланыс",
-        "btn_admin": "🛠 Админ панель",
+        "btn_admin": "🛠 Админ-панель",
         "help_text": (
-            "<b>📚 Бот командалары бойынша анықтама:</b>\n\n"
-            "/random — кездейсоқ видео жіберу\n"
-            "/setting — бот параметрлері (видео қайталауды қосу/өшіру)\n"
-            "/language — тілді өзгерту\n"
-            "/report — әкімшілікке қате туралы хабарлау\n"
-            "/help — көмек және командалар тізімі"
+            "📚 <b>Бот командаларының анықтамасы:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "• /random — кездейсоқ видео алу\n"
+            "• /setting — баптаулар (қайталауды қосу/өшіру)\n"
+            "• /language — тілді өзгерту\n"
+            "• /report — әкімшілікке хабарлама жіберу\n"
+            "• /help — көмек тізімі\n"
+            "━━━━━━━━━━━━━━━━━━━"
         ),
-        "no_videos": "Дерекқорда әзірге видеолар жоқ!",
-        "video_deleted_warn": "💡 <b>Ұнаған видеоларды Таңдаулыларға (Избранное) жіберуге кеңес береміз</b>, себебі бұл хабарлама 10 секундтан кейін өшіріледі!",
+        "no_videos": "📭 Дерекқорда әзірге видеолар жоқ!",
+        "video_deleted_warn": "💡 <b>Кеңес:</b> ұнаған видеоларды Таңдаулыларға жіберуге кеңес береміз, себебі бұл хабарлама 10 секундтан кейін өшіріледі!",
     },
 }
 
@@ -170,7 +209,6 @@ def get_user_lang(user_id: int) -> str:
     return "ru"
 
 
-# Клавиатура выбора языка
 def get_language_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -186,7 +224,6 @@ def get_language_keyboard():
     )
 
 
-# Клавиатуры интерфейса
 def get_user_keyboard(is_admin: bool, lang: str = "ru"):
     t = LANG_TEXTS.get(lang, LANG_TEXTS["ru"])
     keyboard = [
@@ -195,7 +232,7 @@ def get_user_keyboard(is_admin: bool, lang: str = "ru"):
             InlineKeyboardButton(text=t["btn_help"], callback_data="help_menu"),
             InlineKeyboardButton(text=t["btn_contact"], callback_data="contact_admin"),
         ],
-        [InlineKeyboardButton(text="🌍 Изменить язык / Lang", callback_data="change_language")],
+        [InlineKeyboardButton(text="🌍 Сменить язык / Language", callback_data="change_language")],
     ]
     if is_admin:
         keyboard.append(
@@ -207,10 +244,10 @@ def get_user_keyboard(is_admin: bool, lang: str = "ru"):
 def get_admin_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить новое видео", callback_data="add_video")],
-            [InlineKeyboardButton(text="🗑 Управление базой (Видео)", callback_data="manage_videos_0")],
-            [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
-            [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="➕ Загрузить новое видео", callback_data="add_video")],
+            [InlineKeyboardButton(text="🗑 Управление базой видео", callback_data="manage_videos_0")],
+            [InlineKeyboardButton(text="📊 Статистика бота", callback_data="stats")],
+            [InlineKeyboardButton(text="◀️ В главное меню", callback_data="main_menu")],
         ]
     )
 
@@ -230,6 +267,7 @@ async def cmd_start(message: Message):
     await message.answer(
         LANG_TEXTS["ru"]["choose_lang"],
         reply_markup=get_language_keyboard(),
+        parse_mode="HTML"
     )
 
 
@@ -256,8 +294,9 @@ async def set_language_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "change_language")
 async def change_language_callback(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🌍 Пожалуйста, выберите язык / Please choose your language:",
+        "🌍 <b>Выберите язык интерфейса</b>\nChoose your preferred language:",
         reply_markup=get_language_keyboard(),
+        parse_mode="HTML"
     )
     await callback.answer()
 
@@ -265,8 +304,9 @@ async def change_language_callback(callback: CallbackQuery):
 @router.message(Command("language"))
 async def cmd_language(message: Message):
     await message.answer(
-        "🌍 Пожалуйста, выберите язык / Please choose your language:",
+        "🌍 <b>Выберите язык интерфейса</b>\nChoose your preferred language:",
         reply_markup=get_language_keyboard(),
+        parse_mode="HTML"
     )
 
 
@@ -285,7 +325,12 @@ async def callback_help(callback: CallbackQuery):
 
 @router.callback_query(F.data == "contact_admin")
 async def callback_contact_admin(callback: CallbackQuery, state: FSMContext):
-    await callback.message.answer("📝 Опишите ошибку или проблему, и мы передадим её администрации:")
+    await callback.message.answer(
+        "💬 <b>Обратная связь</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Опишите вашу проблему, предложение или ошибку в следующем сообщении, и администрация обязательно рассмотрит его:",
+        parse_mode="HTML"
+    )
     await state.set_state(UserStates.waiting_for_report)
     await callback.answer()
 
@@ -314,12 +359,18 @@ async def cmd_setting(message: Message):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Повтор видео: {status_text}", callback_data="toggle_repeat"
+                    text=f"🔄 Повтор видео: {status_text}", callback_data="toggle_repeat"
                 )
             ]
         ]
     )
-    await message.answer("⚙️ <b>Настройки бота:</b>", reply_markup=keyboard, parse_mode="HTML")
+    await message.answer(
+        "⚙️ <b>Панель настроек</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Здесь вы можете настроить режим повторного показа уже просмотренных видеоматериалов.",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == "toggle_repeat")
@@ -341,18 +392,23 @@ async def toggle_repeat_handler(callback: CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Повтор видео: {status_text}", callback_data="toggle_repeat"
+                    text=f"🔄 Повтор видео: {status_text}", callback_data="toggle_repeat"
                 )
             ]
         ]
     )
     await callback.message.edit_reply_markup(reply_markup=keyboard)
-    await callback.answer("Настройки обновлены!")
+    await callback.answer("⚙️ Настройки успешно обновлены!")
 
 
 @router.message(Command("report"))
 async def cmd_report(message: Message, state: FSMContext):
-    await message.answer("📝 Опишите ошибку или проблему, и мы передадим её администрации:")
+    await message.answer(
+        "💬 <b>Обратная связь</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Опишите вашу проблему, предложение или ошибку в следующем сообщении:",
+        parse_mode="HTML"
+    )
     await state.set_state(UserStates.waiting_for_report)
 
 
@@ -366,13 +422,15 @@ async def process_report(message: Message, state: FSMContext, bot: Bot):
         try:
             await bot.send_message(
                 admin_id,
-                f"🚨 <b>Новый репорт от {user_info}:</b>\n\n{report_text}",
+                f"🚨 <b>Новое обращение от {user_info}:</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"{report_text}",
                 parse_mode="HTML",
             )
         except Exception:
             pass
 
-    await message.answer("✅ Ваша ошибка успешно отправлена администрации. Спасибо!")
+    await message.answer("✅ Ваше сообщение успешно передано администрации. Спасибо за обратную связь!")
     await state.clear()
 
 
@@ -387,11 +445,11 @@ async def send_random_video(callback: CallbackQuery):
     repeat_mode = row[0] if row else 1
 
     if repeat_mode == 1:
-        cursor.execute("SELECT id, file_id FROM videos")
+        cursor.execute("SELECT id, file_id, caption FROM videos")
     else:
         cursor.execute(
             """
-            SELECT id, file_id FROM videos 
+            SELECT id, file_id, caption FROM videos 
             WHERE id NOT IN (SELECT video_id FROM user_history WHERE user_id = ?)
         """,
             (user_id,),
@@ -405,9 +463,9 @@ async def send_random_video(callback: CallbackQuery):
             conn.commit()
             if isinstance(callback, CallbackQuery):
                 await callback.answer(
-                    "Список просмотров сброшен.", show_alert=True
+                    "🔄 Список просмотров был автоматически сброшен.", show_alert=True
                 )
-            cursor.execute("SELECT id, file_id FROM videos")
+            cursor.execute("SELECT id, file_id, caption FROM videos")
             videos = cursor.fetchall()
 
         if not videos:
@@ -418,7 +476,7 @@ async def send_random_video(callback: CallbackQuery):
                 await callback.message.answer(msg)
             return
 
-    video_id, file_id = random.choice(videos)
+    video_id, file_id, caption = random.choice(videos)
 
     cursor.execute(
         "INSERT OR IGNORE INTO user_history (user_id, video_id) VALUES (?, ?)",
@@ -431,6 +489,8 @@ async def send_random_video(callback: CallbackQuery):
     
     sent_message = await target_message.answer_document(
         document=file_id, 
+        caption=caption,
+        parse_mode="HTML",
         supports_streaming=True, 
         reply_markup=get_user_keyboard(is_admin, lang)
     )
@@ -463,10 +523,12 @@ async def send_random_video(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_panel")
 async def admin_panel_handler(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("У вас нет доступа к этой панели.", show_alert=True)
+        await callback.answer("⛔ У вас нет доступа к этому разделу.", show_alert=True)
         return
     await callback.message.edit_text(
-        "🛠 <b>Админ-панель</b>\nВыберите действие:",
+        "🛠 <b>Панель администратора</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Выберите необходимое действие для управления ботом:",
         reply_markup=get_admin_keyboard(),
         parse_mode="HTML",
     )
@@ -500,28 +562,30 @@ async def admin_stats(callback: CallbackQuery):
     all_users = cursor.fetchall()
 
     users_list_str = ""
-    for u_id, u_name in all_users[-15:]:
+    for u_id, u_name in all_users[-10:]:
         uname_display = f"@{u_name}" if u_name != "Без юзернейма" else "Без юзернейма"
-        users_list_str += f"• {uname_display} (ID: <code>{u_id}</code>)\n"
+        users_list_str += f"▫️ {uname_display} (<code>{u_id}</code>)\n"
 
     stats_text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
+        f"📊 <b>Статистика системы:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
         f"👥 Всего пользователей: <b>{total_users}</b>\n"
-        f"🎬 Всего видео в базе: <b>{total_videos}</b>\n\n"
-        f"<b>Последние пользователи:</b>\n{users_list_str}"
+        f"🎬 Видеоматериалов в базе: <b>{total_videos}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Последние пользователи:</b>\n"
+        f"{users_list_str if users_list_str else 'Нет активности'}"
     )
     await callback.message.edit_text(
         stats_text,
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")]
+                [InlineKeyboardButton(text="◀️ Назад в админ-панель", callback_data="admin_panel")]
             ]
         ),
         parse_mode="HTML",
     )
 
 
-# Управление базой видео (список с кнопками удаления и пагинацией)
 @router.callback_query(F.data.startswith("manage_videos_"))
 async def manage_videos(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -530,18 +594,19 @@ async def manage_videos(callback: CallbackQuery):
     page = int(callback.data.split("_")[2])
     per_page = 5
 
-    cursor.execute("SELECT id FROM videos ORDER BY id DESC")
+    cursor.execute("SELECT id, caption FROM videos ORDER BY id DESC")
     all_videos = cursor.fetchall()
     total_videos = len(all_videos)
 
     if total_videos == 0:
         await callback.message.edit_text(
-            "📭 В базе данных пока нет ни одного видео.",
+            "📭 <b>Управление базой видео</b>\n━━━━━━━━━━━━━━━━━━━\nВ базе данных пока нет ни одного видео.",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")]
+                    [InlineKeyboardButton(text="◀️ Назад в админ-панель", callback_data="admin_panel")]
                 ]
             ),
+            parse_mode="HTML"
         )
         await callback.answer()
         return
@@ -551,8 +616,14 @@ async def manage_videos(callback: CallbackQuery):
     page_videos = all_videos[start_idx:end_idx]
 
     keyboard = []
-    for (v_id,) in page_videos:
-        keyboard.append([InlineKeyboardButton(text=f"🗑 Удалить видео #{v_id}", callback_data=f"del_video_{v_id}_{page}")])
+    for (v_id, v_caption) in page_videos:
+        if v_caption:
+            clean_cap = v_caption.replace('\n', ' ')
+            short_caption = f" — {clean_cap[:20]}..." if len(clean_cap) > 20 else f" — {clean_cap}"
+        else:
+            short_caption = " (Без подписи)"
+            
+        keyboard.append([InlineKeyboardButton(text=f"🗑 Видео #{v_id}{short_caption}", callback_data=f"del_video_{v_id}_{page}")])
 
     nav_buttons = []
     if page > 0:
@@ -563,10 +634,13 @@ async def manage_videos(callback: CallbackQuery):
     if nav_buttons:
         keyboard.append(nav_buttons)
 
-    keyboard.append([InlineKeyboardButton(text="◀️ Назад в админку", callback_data="admin_panel")])
+    keyboard.append([InlineKeyboardButton(text="◀️ Назад в админ-панель", callback_data="admin_panel")])
 
     await callback.message.edit_text(
-        f"🗑 <b>Управление базой видео</b>\nВсего видео в базе: <b>{total_videos}</b>\nВыберите видео для удаления:",
+        f"🗑 <b>Управление базой видео</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Всего видео в базе: <b>{total_videos}</b>\n"
+        f"Выберите ролик для удаления:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
         parse_mode="HTML"
     )
@@ -596,15 +670,23 @@ async def delete_video_handler(callback: CallbackQuery):
 async def admin_add_video_start(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         return
-    await callback.message.answer(
-        "📤 Отправьте видеоматериалы (можно сразу несколько файлов или видео, сжатые и несжатые), которые хотите добавить в базу:"
+    await callback.message.edit_text(
+        "📤 <b>Добавление видео (Шаг 1/2)</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "Отправьте видеофайл, который хотите добавить в базу данных:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Отмена", callback_data="admin_panel")]
+            ]
+        ),
+        parse_mode="HTML"
     )
     await state.set_state(AdminStates.waiting_for_video)
     await callback.answer()
 
 
 @router.message(AdminStates.waiting_for_video, F.video | F.document)
-async def admin_save_video(message: Message, state: FSMContext):
+async def admin_get_video_file(message: Message, state: FSMContext):
     file_id = None
     if message.video:
         file_id = message.video.file_id
@@ -615,23 +697,68 @@ async def admin_save_video(message: Message, state: FSMContext):
             file_id = message.document.file_id
 
     if file_id:
-        cursor.execute("INSERT INTO videos (file_id) VALUES (?)", (file_id,))
-        conn.commit()
-
-        is_admin = message.from_user.id in ADMIN_IDS
-        lang = get_user_lang(message.from_user.id)
-        await message.answer(
-            "✅ Видео успешно добавлено в базу данных!",
-            reply_markup=get_user_keyboard(is_admin, lang),
+        await state.update_data(file_id=file_id)
+        
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ Пропустить (без подписи)", callback_data="skip_caption")],
+                [InlineKeyboardButton(text="◀️ Отмена", callback_data="admin_panel")]
+            ]
         )
-        await state.clear()
+        await message.answer(
+            "📝 <b>Добавление видео (Шаг 2/2)</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "Теперь отправьте **текст подписи** к этому видео (можно использовать HTML-теги) или нажмите кнопку ниже:",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await state.set_state(AdminStates.waiting_for_caption)
     else:
-        await message.answer("❌ Этот файл не похож на видео. Пожалуйста, отправьте видеофайл.")
+        await message.answer("❌ Этот файл не похож на видео. Пожалуйста, отправьте видеофайл в формате MP4 или документом.")
 
 
 @router.message(AdminStates.waiting_for_video)
 async def admin_wrong_video_type(message: Message):
     await message.answer("❌ Пожалуйста, отправьте видео или видеофайл.")
+
+
+@router.message(AdminStates.waiting_for_caption, F.text)
+async def admin_save_video_with_caption(message: Message, state: FSMContext):
+    data = await state.get_data()
+    file_id = data.get("file_id")
+    caption = message.text
+
+    cursor.execute("INSERT INTO videos (file_id, caption) VALUES (?, ?)", (file_id, caption))
+    conn.commit()
+
+    is_admin = message.from_user.id in ADMIN_IDS
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(
+        "✅ <b>Успешно!</b> Видео с подписью добавлено в базу данных.",
+        reply_markup=get_user_keyboard(is_admin, lang),
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+
+@router.callback_query(AdminStates.waiting_for_caption, F.data == "skip_caption")
+async def admin_save_video_no_caption(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    file_id = data.get("file_id")
+
+    cursor.execute("INSERT INTO videos (file_id, caption) VALUES (?, NULL)", (file_id,))
+    conn.commit()
+
+    is_admin = callback.from_user.id in ADMIN_IDS
+    lang = get_user_lang(callback.from_user.id)
+    
+    await callback.message.edit_text("✅ Видео успешно добавлено в базу данных (без подписи)!")
+    await callback.message.answer(
+        "Главное меню:",
+        reply_markup=get_user_keyboard(is_admin, lang),
+    )
+    await state.clear()
+    await callback.answer()
 
 
 # Инициализация FastAPI и Aiogram для Web Service
