@@ -73,9 +73,15 @@ class UserStates(StatesGroup):
     waiting_for_report = State()
 
 
-# Клавиатуры
+# Клавиатуры (теперь с кнопками "Помощь" и "Связь с админом")
 def get_user_keyboard(is_admin: bool):
-    keyboard = [[InlineKeyboardButton(text="🎬 Рандом", callback_data="random_video")]]
+    keyboard = [
+        [InlineKeyboardButton(text="🎬 Рандом", callback_data="random_video")],
+        [
+            InlineKeyboardButton(text="🆘 Помощь", callback_data="help_menu"),
+            InlineKeyboardButton(text="💬 Связь с админом", callback_data="contact_admin")
+        ]
+    ]
     if is_admin:
         keyboard.append(
             [InlineKeyboardButton(text="🛠 Админ панель", callback_data="admin_panel")]
@@ -91,6 +97,16 @@ def get_admin_keyboard():
             [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
         ]
     )
+
+
+# Текст справки (вынесем отдельно, чтобы использовать и в команде, и в кнопке)
+HELP_TEXT = (
+    "<b>📚 Справка по командам бота:</b>\n\n"
+    "/random — отправка рандомного видеоматериала\n"
+    "/setting — настройки бота (вкл/выкл повторение видео)\n"
+    "/report — отправить ошибку администрации\n"
+    "/help — помощь и список команд"
+)
 
 
 # Хендлеры бота
@@ -117,14 +133,22 @@ async def cmd_start(message: Message):
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
-    help_text = (
-        "<b>📚 Справка по командам бота:</b>\n\n"
-        "/random — отправка рандомного видеоматериала\n"
-        "/setting — настройки бота (вкл/выкл повторение видео)\n"
-        "/report — отправить ошибку администрации\n"
-        "/help — помощь и список команд"
-    )
-    await message.answer(help_text, parse_mode="HTML")
+    await message.answer(HELP_TEXT, parse_mode="HTML")
+
+
+# Обработка инлайн-кнопки "Помощь"
+@router.callback_query(F.data == "help_menu")
+async def callback_help(callback: CallbackQuery):
+    await callback.message.answer(HELP_TEXT, parse_mode="HTML")
+    await callback.answer()
+
+
+# Обработка инлайн-кнопки "Связь с админом"
+@router.callback_query(F.data == "contact_admin")
+async def callback_contact_admin(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("📝 Опишите ошибку или проблему, и мы передадим её администрации:")
+    await state.set_state(UserStates.waiting_for_report)
+    await callback.answer()
 
 
 @router.message(Command("random"))
@@ -263,7 +287,7 @@ async def send_random_video(callback: CallbackQuery):
     is_admin = user_id in ADMIN_IDS
     target_message = callback.message if isinstance(callback, CallbackQuery) else callback
     
-    # Отправляем видео как нормальный видеофайл (развернутым)
+    # Отправляем видео
     sent_message = await target_message.answer_video(
         video=file_id, reply_markup=get_user_keyboard(is_admin)
     )
@@ -357,15 +381,11 @@ async def admin_add_video_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# Сохранение видео (поддерживает обычные видео, видео в виде файлов/документов, а также пачки)
 @router.message(AdminStates.waiting_for_video, F.video | F.document)
 async def admin_save_video(message: Message, state: FSMContext):
     file_id = None
-    
-    # Если отправлено как обычное видео
     if message.video:
         file_id = message.video.file_id
-    # Если отправлено как файл (документ), проверяем, что это видео по расширению или типу
     elif message.document:
         if message.document.mime_type and "video" in message.document.mime_type:
             file_id = message.document.file_id
