@@ -17,7 +17,7 @@ from aiogram.types import (
 )
 import yt_dlp
 
-# Настрой токен твоего бота здесь или через переменные окружения
+# Настрой токен твоего бота здесь или через переменные окружения на Render
 TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_БОТА")
 ADMIN_ID = 123456789  # Укажи свой Telegram ID для доступа к админке
 
@@ -369,7 +369,6 @@ async def admin_panel_handler(callback: CallbackQuery):
         await callback.answer("⛔ У вас нет доступа к админ-панели.", show_alert=True)
         return
 
-    # Собираем статистику из БД
     cursor.execute("SELECT COUNT(*) FROM users")
     total_users = cursor.fetchone()[0]
 
@@ -427,7 +426,7 @@ async def admin_broadcast_process(message: Message, state: FSMContext):
         try:
             await message.send_copy(chat_id=user_id)
             sent_count += 1
-            await asyncio.sleep(0.05)  # Защита от флуд-контроля Telegram
+            await asyncio.sleep(0.05)
         except Exception:
             blocked_count += 1
 
@@ -493,6 +492,8 @@ async def download_media_link(message: Message):
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
+    
+    # ⚠️ ВАЖНО: Подключаем роутер к диспетчеру, чтобы бот обрабатывал запросы!
     dp.include_router(router)
 
     from aiogram.types import BotCommand
