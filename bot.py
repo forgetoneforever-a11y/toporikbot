@@ -208,6 +208,12 @@ async def cb_change_language(callback: CallbackQuery):
     )
 
 
+# ================= STUB HANDLERS FOR CATEGORIES =================
+@router.callback_query(F.data.in_({"watch_kids", "watch_porno", "random_video"}))
+async def cb_stub_categories(callback: CallbackQuery):
+    await callback.answer("🚧 Этот раздел находится в разработке!", show_alert=True)
+
+
 # ================= PROFILE (ЛИЧНЫЙ КАБИНЕТ) =================
 @router.callback_query(F.data == "user_profile")
 async def user_profile_handler(callback: CallbackQuery):
@@ -488,12 +494,18 @@ async def download_media_link(message: Message):
                 pass
 
 
+# ================= GENERAL TEXT HANDLER =================
+@router.message(F.text & ~F.text.startswith("http"))
+async def echo_text(message: Message):
+    await message.answer("💬 Отправь мне ссылку на видео (начинающуюся с http), и я скачаю её!")
+
+
 # ================= MAIN FUNCTION =================
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
     
-    # ⚠️ ВАЖНО: Подключаем роутер к диспетчеру, чтобы бот обрабатывал запросы!
+    # Подключаем роутер к диспетчеру
     dp.include_router(router)
 
     from aiogram.types import BotCommand
