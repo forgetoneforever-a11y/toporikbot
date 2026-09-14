@@ -6,6 +6,8 @@ import sqlite3
 import uuid
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -21,6 +23,10 @@ ADMIN_ID = 123456789  # Укажи свой Telegram ID для доступа к
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
+
+# ================= FSM ДЛЯ АДМИНКИ =================
+class AdminStates(StatesGroup):
+    waiting_for_broadcast = State()
 
 # ================= DATABASE =================
 conn = sqlite3.connect("bot_database.db", check_same_thread=False)
@@ -214,9 +220,7 @@ async def user_profile_handler(callback: CallbackQuery):
     else:
         watched, bonus, premium_until = 0, 0, None
 
-    # Проверяем статус подписки
     if premium_until:
-        # Конвертируем из строки БД в объект datetime если нужно
         if isinstance(premium_until, str):
             try:
                 premium_dt = datetime.datetime.fromisoformat(premium_until)
@@ -251,22 +255,22 @@ async def user_profile_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-# ================= PREMIUM, STARS & CRYPTO SHOP =================
+# ================= PREMIUM & SHOP =================
 @router.callback_query(F.data == "premium_shop")
 async def premium_shop_handler(callback: CallbackQuery):
     shop_text = (
         f"⭐ <b>Магазин и Премиум-доступ</b>\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
         f"Выберите удобный способ оплаты:\n\n"
-        f"• <b>Telegram Stars (XTR)</b> — официальная валюта Telegram (быстро и без комиссии).\n"
-        f"• <b>CryptoBot / ЮKassa</b> — оплата криптовалютой или банковскими картами (рубли)."
+        f"• <b>Telegram Stars (XTR)</b> — официальная валюта Telegram.\n"
+        f"• <b>CryptoBot / ЮKassa</b> — оплата криптой или картами."
     )
     
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⭐ Оплатить через Telegram Stars", callback_data="shop_stars_menu")],
             [InlineKeyboardButton(text="💎 Оплатить криптой (CryptoBot)", callback_data="shop_crypto")],
-            [InlineKeyboardButton(text="💳 Оплатить картой (ЮKassa / Рубли)", callback_data="shop_fiat")],
+            [InlineKeyboardButton(text="💳 Оплатить картой (ЮKassa)", callback_data="shop_fiat")],
             [InlineKeyboardButton(text="◀️ В личный кабинет", callback_data="user_profile")]
         ]
     )
@@ -274,13 +278,9 @@ async def premium_shop_handler(callback: CallbackQuery):
     await callback.answer()
 
 
-# Подменю Telegram Stars
 @router.callback_query(F.data == "shop_stars_menu")
 async def shop_stars_menu(callback: CallbackQuery):
-    text = (
-        "⭐ <b>Оплата через Telegram Stars</b>\n"
-        "Выберите желаемый тариф:"
-    )
+    text = "⭐ <b>Оплата через Telegram Stars</b>\nВыберите желаемый тариф:"
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎁 10 звезд (10 видео)", callback_data="buy_stars_10")],
@@ -298,23 +298,16 @@ async def process_buy_stars(callback: CallbackQuery):
     amount = int(callback.data.split("_")[2])
     
     if amount == 10:
-        title = "Пакет видео (10 шт.)"
-        description = "Дает право просмотреть 10 дополнительных видео."
-        payload = "star_pack_10"
+        title, description, payload = "Пакет видео (10 шт.)", "Дает право просмотреть 10 видео.", "star_pack_10"
     elif amount == 100:
-        title = "Большой пакет видео (100 шт.)"
-        description = "Дает право просмотреть 100 дополнительных видео."
-        payload = "star_pack_100"
+        title, description, payload = "Пакет видео (100 шт.)", "Дает право просмотреть 100 видео.", "star_pack_100"
     elif amount == 1000:
-        title = "VIP-подписка на 1 месяц"
-        description = "Полный безлимитный доступ ко всем материалам бота на 30 дней."
-        payload = "star_sub_1000"
+        title, description, payload = "VIP-подписка на 1 месяц", "Безлимитный доступ на 30 дней.", "star_sub_1000"
     else:
         await callback.answer("❌ Неизвестный тариф", show_alert=True)
         return
 
     prices = [LabeledPrice(label="Telegram Stars", amount=amount)]
-    
     await callback.message.bot.send_invoice(
         chat_id=callback.message.chat.id,
         title=title,
@@ -338,55 +331,112 @@ async def process_successful_payment(message: Message):
     payload = payment.invoice_payload
     user_id = message.from_user.id
     
-    if payload in ["star_pack_10", "crypto_pack_10", "fiat_pack_10"]:
+    if "pack_10" in payload:
         cursor.execute("UPDATE users SET bonus_videos = bonus_videos + 10 WHERE user_id = ?", (user_id,))
         conn.commit()
-        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nДобавлено +10 видео к балансу.", parse_mode="HTML")
-        
-    elif payload in ["star_pack_100", "crypto_pack_100", "fiat_pack_100"]:
+        await message.answer("🎉 <b>Оплата прошла успешно!</b> Добавлено +10 видео.", parse_mode="HTML")
+    elif "pack_100" in payload:
         cursor.execute("UPDATE users SET bonus_videos = bonus_videos + 100 WHERE user_id = ?", (user_id,))
         conn.commit()
-        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nДобавлено +100 видео к балансу.", parse_mode="HTML")
-        
-    elif payload in ["star_sub_1000", "crypto_sub_1000", "fiat_sub_1000"]:
+        await message.answer("🎉 <b>Оплата прошла успешно!</b> Добавлено +100 видео.", parse_mode="HTML")
+    elif "sub_1000" in payload:
         expire_date = datetime.datetime.now() + datetime.timedelta(days=30)
         cursor.execute("UPDATE users SET premium_until = ? WHERE user_id = ?", (expire_date, user_id))
         conn.commit()
-        await message.answer("👑 <b>Поздравляем с покупкой VIP-подписки!</b>\nДоступ активирован на 30 дней.", parse_mode="HTML")
+        await message.answer("👑 <b>VIP-подписка активирована на 30 дней!</b>", parse_mode="HTML")
 
 
-# Заглушки под альтернативную оплату (CryptoBot / ЮKassa)
 @router.callback_query(F.data == "shop_crypto")
 async def shop_crypto_handler(callback: CallbackQuery):
-    # Здесь можно интегрировать создание инвойса через CryptoPay API (CryptoBot)
-    text = (
-        "💎 <b>Оплата через CryptoBot (Криптовалюта)</b>\n\n"
-        "Для подключения автоматической оплаты через CryptoBot вы можете использовать официальную библиотеку <code>py-cryptopay-api</code>.\n\n"
-        "Пример ссылки на оплату или кнопку генерации чека можно сформировать через @CryptoBot."
-    )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад в магазин", callback_data="premium_shop")]
-        ]
-    )
+    text = "💎 <b>Оплата через CryptoBot</b>\nИнтегрируйте API CryptoPay для генерации чеков в криптовалюте."
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="premium_shop")]])
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
 @router.callback_query(F.data == "shop_fiat")
 async def shop_fiat_handler(callback: CallbackQuery):
-    # Здесь можно интегрировать ЮKassa (через send_invoice с provider_token от ЮKassa)
-    text = (
-        "💳 <b>Оплата банковской картой (ЮKassa / Рубли)</b>\n\n"
-        "Для приема рублевых платежей через карты РФ укажите ваш токен ЮKassa в поле <code>provider_token</code> при вызове <code>send_invoice</code>."
-    )
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад в магазин", callback_data="premium_shop")]
-        ]
-    )
+    text = "💳 <b>Оплата картой (ЮKassa)</b>\nУкажите `provider_token` от ЮKassa для приема платежей в рублях."
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="premium_shop")]])
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
+
+
+# ================= АДМИН-ПАНЕЛЬ =================
+@router.callback_query(F.data == "admin_panel")
+async def admin_panel_handler(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ У вас нет доступа к админ-панели.", show_alert=True)
+        return
+
+    # Собираем статистику из БД
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT SUM(watched_videos) FROM users")
+    total_watched = cursor.fetchone()[0] or 0
+
+    admin_text = (
+        f"🛠 <b>Админ-панель бота</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>Всего пользователей:</b> {total_users}\n"
+        f"📊 <b>Всего скачано видео:</b> {total_watched}\n"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Сделать рассылку", callback_data="admin_broadcast")],
+            [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")]
+        ]
+    )
+    await callback.message.edit_text(admin_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("⛔ Отказано в доступе.", show_alert=True)
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_panel")]])
+    await callback.message.edit_text(
+        "📢 <b>Рассылка сообщений</b>\n\nОтправьте текст, фото или видео, которое хотите разослать всем пользователям бота:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminStates.waiting_for_broadcast)
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_broadcast)
+async def admin_broadcast_process(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await state.clear()
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    sent_count = 0
+    blocked_count = 0
+
+    status_msg = await message.answer("⏳ Рассылка началась...")
+
+    for (user_id,) in users:
+        try:
+            await message.send_copy(chat_id=user_id)
+            sent_count += 1
+            await asyncio.sleep(0.05)  # Защита от флуд-контроля Telegram
+        except Exception:
+            blocked_count += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📤 Успешно отправлено: {sent_count}\n"
+        f"🚫 Заблокировали бота: {blocked_count}",
+        parse_mode="HTML"
+    )
 
 
 # ================= YT-DLP DOWNLOADER LOGIC =================
@@ -395,7 +445,6 @@ async def download_media_link(message: Message):
     user_id = message.from_user.id
     url = message.text.strip()
     
-    # Увеличиваем счетчик просмотренных видео в статистике
     cursor.execute("UPDATE users SET watched_videos = watched_videos + 1 WHERE user_id = ?", (user_id,))
     conn.commit()
 
@@ -422,7 +471,7 @@ async def download_media_link(message: Message):
         if os.path.exists(downloaded_file):
             file_size = os.path.getsize(downloaded_file) / (1024 * 1024)
             if file_size > 50:
-                await processing_msg.edit_text("❌ Файл слишком большой (больше 50 МБ), Telegram не разрешает отправить.")
+                await processing_msg.edit_text("❌ Файл слишком большой (больше 50 МБ).")
             else:
                 await message.answer_video(video=open(downloaded_file, "rb"))
                 await processing_msg.delete()
