@@ -6,8 +6,6 @@ import sqlite3
 import uuid
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -36,7 +34,8 @@ CREATE TABLE IF NOT EXISTS users (
     repeat_mode INTEGER DEFAULT 1,
     language TEXT DEFAULT 'ru',
     premium_until TIMESTAMP DEFAULT NULL,
-    bonus_videos INTEGER DEFAULT 0
+    bonus_videos INTEGER DEFAULT 0,
+    watched_videos INTEGER DEFAULT 0
 )
 """
 )
@@ -46,6 +45,7 @@ conn.commit()
 for col_def in [
     ("premium_until", "TIMESTAMP DEFAULT NULL"),
     ("bonus_videos", "INTEGER DEFAULT 0"),
+    ("watched_videos", "INTEGER DEFAULT 0"),
 ]:
     try:
         cursor.execute(f"ALTER TABLE users ADD COLUMN {col_def[0]} {col_def[1]}")
@@ -70,19 +70,11 @@ LANG_TEXTS = {
         "btn_kids": "🧸 Категория 1",
         "btn_porno": "🔞 Категория 2",
         "btn_random": "🎲 Случайное видео",
-        "btn_premium": "⭐ Премиум и Звезды",
+        "btn_profile": "👤 Личный кабинет",
+        "btn_premium": "⭐ Премиум и Магазин",
         "btn_help": "❓ Помощь",
         "btn_contact": "📞 Поддержка",
         "btn_admin": "🛠 Админ-панель",
-        "premium_menu": (
-            "⭐ <b>Telegram Stars & Премиум-доступ</b>\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "Поддержи проект и получи расширенные возможности:\n\n"
-            "🎁 <b>10 ⭐</b> — Пакет из 10 видео\n"
-            "🔥 <b>100 ⭐</b> — Пакет из 100 видео\n"
-            "👑 <b>1000 ⭐</b> — <b>VIP-подписка на 1 месяц</b> (доступ ко всем категориям и видео без ограничений!)\n\n"
-            "Выбери тариф ниже:"
-        ),
         "help_text": "📖 <b>Справка:</b>\nПросто отправь ссылку на поддерживаемый ресурс, и бот пришлет файл.",
         "contact_admin": "✍️ Написать администратору можно через @admin_username",
         "lang_changed": "🌍 Язык успешно изменен на русский!",
@@ -95,19 +87,11 @@ LANG_TEXTS = {
         "btn_kids": "🧸 Category 1",
         "btn_porno": "🔞 Category 2",
         "btn_random": "🎲 Random Video",
-        "btn_premium": "⭐ Premium & Stars",
+        "btn_profile": "👤 Profile",
+        "btn_premium": "⭐ Premium & Shop",
         "btn_help": "❓ Help",
         "btn_contact": "📞 Support",
         "btn_admin": "🛠 Admin Panel",
-        "premium_menu": (
-            "⭐ <b>Telegram Stars & Premium Access</b>\n"
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "Support the project and get advanced features:\n\n"
-            "🎁 <b>10 ⭐</b> — 10 videos pack\n"
-            "🔥 <b>100 ⭐</b> — 100 videos pack\n"
-            "👑 <b>1000 ⭐</b> — <b>VIP Subscription for 1 month</b> (unlimited access!)\n\n"
-            "Choose a plan below:"
-        ),
         "help_text": "📖 <b>Help:</b>\nJust send a link to a resource, and the bot will send you the file.",
         "contact_admin": "✍️ Contact admin at @admin_username",
         "lang_changed": "🌍 Language successfully changed to English!",
@@ -123,7 +107,10 @@ def get_user_keyboard(is_admin: bool, lang: str = "ru"):
             InlineKeyboardButton(text=t["btn_porno"], callback_data="watch_porno"),
         ],
         [InlineKeyboardButton(text=t["btn_random"], callback_data="random_video")],
-        [InlineKeyboardButton(text=t["btn_premium"], callback_data="premium_shop")],
+        [
+            InlineKeyboardButton(text=t["btn_profile"], callback_data="user_profile"),
+            InlineKeyboardButton(text=t["btn_premium"], callback_data="premium_shop"),
+        ],
         [
             InlineKeyboardButton(text=t["btn_help"], callback_data="help_menu"),
             InlineKeyboardButton(text=t["btn_contact"], callback_data="contact_admin"),
@@ -215,38 +202,95 @@ async def cb_change_language(callback: CallbackQuery):
     )
 
 
-# ================= PREMIUM & TELEGRAM STARS SHOP =================
-@router.callback_query(F.data == "premium_shop")
-async def premium_shop_handler(callback: CallbackQuery):
-    lang = get_user_lang(callback.from_user.id)
-    t = LANG_TEXTS[lang]
+# ================= PROFILE (ЛИЧНЫЙ КАБИНЕТ) =================
+@router.callback_query(F.data == "user_profile")
+async def user_profile_handler(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    cursor.execute("SELECT watched_videos, bonus_videos, premium_until FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
     
+    if row:
+        watched, bonus, premium_until = row
+    else:
+        watched, bonus, premium_until = 0, 0, None
+
+    # Проверяем статус подписки
+    if premium_until:
+        # Конвертируем из строки БД в объект datetime если нужно
+        if isinstance(premium_until, str):
+            try:
+                premium_dt = datetime.datetime.fromisoformat(premium_until)
+            except ValueError:
+                premium_dt = None
+        else:
+            premium_dt = premium_until
+
+        if premium_dt and premium_dt > datetime.datetime.now():
+            sub_status = f"✅ Активна до {premium_dt.strftime('%d.%m.%Y %H:%M')}"
+        else:
+            sub_status = "❌ Не активна"
+    else:
+        sub_status = "❌ Не активна"
+
+    profile_text = (
+        f"👤 <b>Личный кабинет</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+        f"📊 <b>Просмотрено видео:</b> {watched}\n"
+        f"🎁 <b>Бонусных видео на балансе:</b> {bonus}\n"
+        f"👑 <b>VIP-подписка:</b> {sub_status}\n"
+    )
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🎁 10 звезд (10 видео)", callback_data="buy_stars_10")],
-            [InlineKeyboardButton(text="🔥 100 звезд (100 видео)", callback_data="buy_stars_100")],
-            [InlineKeyboardButton(text="👑 1000 звезд (Подписка на месяц)", callback_data="buy_stars_1000")],
+            [InlineKeyboardButton(text="⭐ Пополнить / Купить премиум", callback_data="premium_shop")],
             [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")]
         ]
     )
-    await callback.message.edit_text(t["premium_menu"], reply_markup=keyboard, parse_mode="HTML")
+    await callback.message.edit_text(profile_text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
 
-@router.message(Command("premium"))
-async def cmd_premium(message: Message):
-    lang = get_user_lang(message.from_user.id)
-    t = LANG_TEXTS[lang]
+# ================= PREMIUM, STARS & CRYPTO SHOP =================
+@router.callback_query(F.data == "premium_shop")
+async def premium_shop_handler(callback: CallbackQuery):
+    shop_text = (
+        f"⭐ <b>Магазин и Премиум-доступ</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"Выберите удобный способ оплаты:\n\n"
+        f"• <b>Telegram Stars (XTR)</b> — официальная валюта Telegram (быстро и без комиссии).\n"
+        f"• <b>CryptoBot / ЮKassa</b> — оплата криптовалютой или банковскими картами (рубли)."
+    )
     
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⭐ Оплатить через Telegram Stars", callback_data="shop_stars_menu")],
+            [InlineKeyboardButton(text="💎 Оплатить криптой (CryptoBot)", callback_data="shop_crypto")],
+            [InlineKeyboardButton(text="💳 Оплатить картой (ЮKassa / Рубли)", callback_data="shop_fiat")],
+            [InlineKeyboardButton(text="◀️ В личный кабинет", callback_data="user_profile")]
+        ]
+    )
+    await callback.message.edit_text(shop_text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+# Подменю Telegram Stars
+@router.callback_query(F.data == "shop_stars_menu")
+async def shop_stars_menu(callback: CallbackQuery):
+    text = (
+        "⭐ <b>Оплата через Telegram Stars</b>\n"
+        "Выберите желаемый тариф:"
+    )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🎁 10 звезд (10 видео)", callback_data="buy_stars_10")],
             [InlineKeyboardButton(text="🔥 100 звезд (100 видео)", callback_data="buy_stars_100")],
             [InlineKeyboardButton(text="👑 1000 звезд (Подписка на месяц)", callback_data="buy_stars_1000")],
-            [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")]
+            [InlineKeyboardButton(text="◀️ Назад в магазин", callback_data="premium_shop")]
         ]
     )
-    await message.answer(t["premium_menu"], reply_markup=keyboard, parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("buy_stars_"))
@@ -276,9 +320,9 @@ async def process_buy_stars(callback: CallbackQuery):
         title=title,
         description=description,
         payload=payload,
-        currency="XTR",  # Валюта Telegram Stars
+        currency="XTR",
         prices=prices,
-        provider_token="" # Для цифровых товаров и звезд provider_token всегда пустой
+        provider_token=""
     )
     await callback.answer()
 
@@ -294,27 +338,67 @@ async def process_successful_payment(message: Message):
     payload = payment.invoice_payload
     user_id = message.from_user.id
     
-    if payload == "star_pack_10":
+    if payload in ["star_pack_10", "crypto_pack_10", "fiat_pack_10"]:
         cursor.execute("UPDATE users SET bonus_videos = bonus_videos + 10 WHERE user_id = ?", (user_id,))
         conn.commit()
-        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nТебе добавлено +10 видео к просмотру.", parse_mode="HTML")
+        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nДобавлено +10 видео к балансу.", parse_mode="HTML")
         
-    elif payload == "star_pack_100":
+    elif payload in ["star_pack_100", "crypto_pack_100", "fiat_pack_100"]:
         cursor.execute("UPDATE users SET bonus_videos = bonus_videos + 100 WHERE user_id = ?", (user_id,))
         conn.commit()
-        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nТебе добавлено +100 видео к просмотру.", parse_mode="HTML")
+        await message.answer("🎉 <b>Оплата прошла успешно!</b>\nДобавлено +100 видео к балансу.", parse_mode="HTML")
         
-    elif payload == "star_sub_1000":
+    elif payload in ["star_sub_1000", "crypto_sub_1000", "fiat_sub_1000"]:
         expire_date = datetime.datetime.now() + datetime.timedelta(days=30)
         cursor.execute("UPDATE users SET premium_until = ? WHERE user_id = ?", (expire_date, user_id))
         conn.commit()
-        await message.answer("👑 <b>Поздравляем с покупкой VIP-подписки!</b>\nДоступ ко всем материалам активирован на 30 дней.", parse_mode="HTML")
+        await message.answer("👑 <b>Поздравляем с покупкой VIP-подписки!</b>\nДоступ активирован на 30 дней.", parse_mode="HTML")
+
+
+# Заглушки под альтернативную оплату (CryptoBot / ЮKassa)
+@router.callback_query(F.data == "shop_crypto")
+async def shop_crypto_handler(callback: CallbackQuery):
+    # Здесь можно интегрировать создание инвойса через CryptoPay API (CryptoBot)
+    text = (
+        "💎 <b>Оплата через CryptoBot (Криптовалюта)</b>\n\n"
+        "Для подключения автоматической оплаты через CryptoBot вы можете использовать официальную библиотеку <code>py-cryptopay-api</code>.\n\n"
+        "Пример ссылки на оплату или кнопку генерации чека можно сформировать через @CryptoBot."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад в магазин", callback_data="premium_shop")]
+        ]
+    )
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop_fiat")
+async def shop_fiat_handler(callback: CallbackQuery):
+    # Здесь можно интегрировать ЮKassa (через send_invoice с provider_token от ЮKassa)
+    text = (
+        "💳 <b>Оплата банковской картой (ЮKassa / Рубли)</b>\n\n"
+        "Для приема рублевых платежей через карты РФ укажите ваш токен ЮKassa в поле <code>provider_token</code> при вызове <code>send_invoice</code>."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад в магазин", callback_data="premium_shop")]
+        ]
+    )
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
 
 
 # ================= YT-DLP DOWNLOADER LOGIC =================
 @router.message(F.text.startswith("http"))
 async def download_media_link(message: Message):
+    user_id = message.from_user.id
     url = message.text.strip()
+    
+    # Увеличиваем счетчик просмотренных видео в статистике
+    cursor.execute("UPDATE users SET watched_videos = watched_videos + 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+
     processing_msg = await message.answer("⏳ Скачиваю медиа, подождите...")
 
     file_id = str(uuid.uuid4())
@@ -322,7 +406,7 @@ async def download_media_link(message: Message):
 
     ydl_opts = {
         "outtmpl": output_template,
-        "format": "best[filesize<50M]/best", # Ограничение под лимиты телеграма (~50МБ)
+        "format": "best[filesize<50M]/best",
         "noplaylist": True,
     }
 
@@ -362,11 +446,10 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
 
-    # Регистрация команд в меню бота
     from aiogram.types import BotCommand
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 Главное меню"),
-        BotCommand(command="premium", description="⭐ Премиум и Звезды"),
+        BotCommand(command="premium", description="⭐ Магазин и Премиум"),
     ])
 
     await bot.delete_webhook(drop_pending_updates=True)
