@@ -15,9 +15,11 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    FSInputFile,
 )
 from fastapi import FastAPI, Request
 import uvicorn
+import yt_dlp
 
 # НАСТРОЙКИ БОТА И АДМИНЫ
 TOKEN = "8952197475:AAG5cY8qVLGbu-59TuHZuVWtoKg4KzCwjsQ"
@@ -61,7 +63,6 @@ CREATE TABLE IF NOT EXISTS videos (
 """
 )
 
-# Проверяем и добавляем колонки при обновлении старой базы
 for col_def in [
     ("language", "TEXT DEFAULT 'ru'"),
     ("caption", "TEXT"),
@@ -93,7 +94,7 @@ cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_user ON user_history(user
 conn.commit()
 
 
-# Состояния FSM
+# Состояния FSM для админки и репортов
 class AdminStates(StatesGroup):
     waiting_for_category = State()
     waiting_for_video = State()
@@ -110,7 +111,7 @@ LANG_TEXTS = {
         "welcome": (
             "✨ <b>Главное меню бота</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
-            "🎬 Выберите категорию или нажмите кнопку ниже для получения контента.\n"
+            "🎬 Выберите категорию или просто отправьте ссылку на видео/музыку (YouTube, TikTok и др.), чтобы скачать её.\n"
             "📌 Используйте /help для справки."
         ),
         "choose_lang": "🌍 <b>Выберите язык интерфейса</b>\nChoose your preferred language:",
@@ -124,11 +125,11 @@ LANG_TEXTS = {
         "help_text": (
             "📚 <b>Справочник по командам бота:</b>\n"
             "━━━━━━━━━━━━━━━━━━━\n"
+            "• 🔗 <i>Просто отправьте ссылку</i> (YouTube, TikTok и др.) — бот скачает медиафайл\n"
             "• /random — получить случайный видеоматериал\n"
-            "• /setting — персональные настройки (вкл/выкл повтор)\n"
+            "• /setting — персональные настройки (повтор видео)\n"
             "• /language — сменить язык интерфейса\n"
             "• /report — отправить сообщение администрации\n"
-            "• /help — вызвать эту справку\n"
             "━━━━━━━━━━━━━━━━━━━"
         ),
         "no_videos": "📭 В выбранной категории пока нет ни одного видеоматериала!",
@@ -192,23 +193,75 @@ def get_admin_keyboard():
     )
 
 
-# КОМАНДЫ НАГРУЗКИ /work
-@router.message(Command("work"))
-async def cmd_work(message: Message):
-    global HEAVY_WORK_MODE
-    if message.from_user.id not in ADMIN_IDS:
+# ==========================================
+# ФУНКЦИЯ: СКАЧИВАНИЕ ВИДЕО/МУЗЫКИ ПО ССЫЛКЕ (yt-dlp)
+# ==========================================
+@router.message(F.text.regexp(r"https?://[^\s]+"))
+async def download_media_link(message: Message):
+    url = message.text.strip()
+    
+    if len(url.split()) > 1 or url.startswith("/"):
         return
-    HEAVY_WORK_MODE = True
-    await message.answer("⚠️ Режим технической сложности **включен**.")
 
+    processing_msg = await message.answer("⏳ <b>Скачиваю медиа по ссылке...</b> Пожалуйста, подождите.", parse_mode="HTML")
+    
+    output_template = f"downloads/media_{message.from_user.id}_%(id)s.%(ext)s"
+    os.makedirs("downloads", exist_ok=True)
 
-@router.message(Command("rework"))
-async def cmd_rework(message: Message):
-    global HEAVY_WORK_MODE
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    HEAVY_WORK_MODE = False
-    await message.answer("✅ Режим технической сложности **выключен**.")
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'outtmpl': output_template,
+        'max_filesize': 50 * 1024 * 1024,  # Ограничение 50 МБ для Telegram
+        'noplaylist': True,
+    }
+
+    downloaded_file = None
+    try:
+        def run_dl():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info)
+
+        downloaded_file = await asyncio.to_thread(run_dl)
+
+        if downloaded_file and os.path.exists(downloaded_file):
+            file_size = os.path.getsize(downloaded_file)
+            if file_size > 50 * 1024 * 1024:
+                await message.bot.edit_message_text(
+                    "❌ Файл слишком большой (превышает лимит Telegram в 50 МБ).",
+                    chat_id=message.chat.id,
+                    message_id=processing_msg.message_id
+                )
+                return
+
+            input_file = FSInputFile(downloaded_file)
+            
+            if downloaded_file.endswith(('.mp3', '.m4a', '.wav', '.opus', '.flac')):
+                await message.answer_audio(audio=input_file, caption="🎵 Скачанная музыка через бота")
+            else:
+                await message.answer_video(video=input_file, caption="📥 Скачанный файл через бота", supports_streaming=True)
+            
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+        else:
+            raise Exception("Файл не был найден после скачивания.")
+
+    except Exception as e:
+        logging.error(f"Ошибка yt-dlp: {e}")
+        try:
+            await message.bot.edit_message_text(
+                "❌ <b>Не удалось скачать медиа по ссылке.</b>\nВозможные причины: видео защищено, удалено или файл весит больше 50 МБ.",
+                chat_id=message.chat.id,
+                message_id=processing_msg.message_id,
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+    finally:
+        if downloaded_file and os.path.exists(downloaded_file):
+            try:
+                os.remove(downloaded_file)
+            except Exception:
+                pass
 
 
 # /start КОМАНДА
@@ -238,7 +291,6 @@ async def cmd_start(message: Message, command: CommandObject):
                 file_id, caption, category = video_data
                 chat_id = message.chat.id
 
-                # Отправляем видео (удаление через 10 сек)
                 sent_video = await message.answer_document(
                     document=file_id,
                     caption=caption,
@@ -260,7 +312,6 @@ async def cmd_start(message: Message, command: CommandObject):
                         pass
                 asyncio.create_task(delete_video())
 
-                # Предупреждение (удаление через 25 сек)
                 warn_msg = await message.answer(text=t["video_deleted_warn"], parse_mode="HTML")
 
                 async def delete_warning():
@@ -274,7 +325,6 @@ async def cmd_start(message: Message, command: CommandObject):
         except Exception:
             pass
 
-    # Отправляем отдельным сообщением главное меню
     await message.answer(
         t["welcome"],
         reply_markup=get_user_keyboard(is_admin, lang),
@@ -307,7 +357,7 @@ async def back_to_main_menu(callback: CallbackQuery):
     )
 
 
-# ЛОГИКА ОТПРАВКИ ВИДЕО ПО КАТЕГОРИЯМ
+# ЛОГИКА ОТПРАВКИ ВИДЕО ПО КАТЕГОРИЯМ И РАНДОМУ
 @router.callback_query(F.data.in_({"watch_kids", "watch_porno", "random_video"}) | F.data.startswith("next_v_"))
 async def send_video_handler(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -374,7 +424,6 @@ async def send_video_handler(callback: CallbackQuery):
 
     chat_id = callback.message.chat.id
 
-    # 1. Отправляем видео с инлайн-кнопкой продолжения сессии («Закрепить отправку»)
     sent_video = await callback.message.answer_document(
         document=file_id,
         caption=caption,
@@ -397,7 +446,6 @@ async def send_video_handler(callback: CallbackQuery):
             pass
     asyncio.create_task(delete_video())
 
-    # 2. Предупреждение удаляется через 25 сек
     warn_msg = await callback.message.answer(text=t["video_deleted_warn"], parse_mode="HTML")
 
     async def delete_warning():
@@ -409,12 +457,11 @@ async def send_video_handler(callback: CallbackQuery):
     asyncio.create_task(delete_warning())
 
 
-# ОСТАЛЬНЫЕ ХЕНДЛЕРЫ ЯЗЫКОВ, ПОМОЩИ И АДМИНКИ
+# ЯЗЫКОВЫЕ И ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ
 @router.callback_query(F.data.startswith("set_lang_"))
 async def set_language_callback(callback: CallbackQuery):
     lang = callback.data.split("_")[2]
     user_id = callback.from_user.id
-    name = callback.from_user.first_name
 
     cursor.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
     conn.commit()
@@ -560,14 +607,7 @@ async def admin_reply_to_user(message: Message, bot: Bot):
         await message.answer(f"❌ Ошибка отправки: {e}")
 
 
-@router.message(F.text)
-async def handle_any_text(message: Message):
-    if HEAVY_WORK_MODE and message.from_user.id not in ADMIN_IDS:
-        await message.answer("⚠️ Бот временно перегружен.")
-        return
-
-
-# АДМИН-ПАНЕЛЬ И ДОБАВЛЕНИЕ ВИДЕО С КАТЕГОРИЯМИ
+# АДМИН-ПАНЕЛЬ
 @router.callback_query(F.data == "admin_panel")
 async def admin_panel_handler(callback: CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
@@ -584,7 +624,7 @@ async def admin_stats(callback: CallbackQuery):
     cursor.execute("SELECT COUNT(*) FROM videos")
     total_videos = cursor.fetchone()[0]
     await callback.message.edit_text(
-        f"📊 <b>Статистика:</b>\n👥 Пользователей: {total_users}\n🎬 Видео: {total_videos}",
+        f"📊 <b>Статистика:</b>\n👥 Пользователей: {total_users}\n🎬 Видео в базе: {total_videos}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")]]),
         parse_mode="HTML"
     )
@@ -737,7 +777,7 @@ async def delete_video_handler(callback: CallbackQuery):
     await manage_videos(callback)
 
 
-# ИНИЦИАЛИЗАЦИЯ И ЗАПУСК
+# ИНИЦИАЛИЗАЦИЯ И ЗАПУСК ЧЕРЕЗ FASTAPI (WEBHOOK)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 dp.include_router(router)
@@ -748,7 +788,6 @@ async def lifespan(app: FastAPI):
         await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
         logging.info("✅ Вебхук установлен")
         
-        # Установка команд в меню слева
         await bot.set_my_commands([
             BotCommand(command="random", description="🎬 Случайное видео"),
             BotCommand(command="setting", description="⚙️ Настройки повтора"),
@@ -757,7 +796,7 @@ async def lifespan(app: FastAPI):
             BotCommand(command="help", description="🆘 Справка"),
         ])
     except Exception as e:
-        logging.error(f"❌ Ошибка: {e}")
+        logging.error(f"❌ Ошибка запуска: {e}")
     yield
     await bot.session.close()
 
