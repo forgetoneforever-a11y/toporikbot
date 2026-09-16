@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xanax Mini App</title>
+    <!-- Подключаем Telegram Web App JS API -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-color: #f8fafc;
+            --accent-color: #38bdf8;
+            --accent-gradient: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            /* Красивый фоновый градиент для глубины */
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(129, 140, 248, 0.15) 0px, transparent 50%);
+            color: var(--text-color);
+            min-height: 100vh;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 480px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Шапка профиля */
+        .header {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .avatar {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: var(--accent-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+        }
+
+        .user-info h2 {
+            font-size: 18px;
+            margin-bottom: 4px;
+        }
+
+        .user-info p {
+            font-size: 13px;
+            color: #94a3b8;
+        }
+
+        /* Glassmorphism карточки (панели) */
+        .card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: transform 0.2s ease;
+        }
+
+        .card:active {
+            transform: scale(0.98);
+        }
+
+        .card h3 {
+            font-size: 16px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card p {
+            font-size: 13px;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+
+        /* Сетка кнопок / разделов */
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* Кнопки действий */
+        .btn {
+            background: var(--accent-gradient);
+            border: none;
+            border-radius: 14px;
+            color: white;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(56, 189, 248, 0.3);
+            transition: opacity 0.2s;
+        }
+
+        .btn:active {
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Шапка -->
+        <div class="header">
+            <div class="avatar" id="user-avatar">U</div>
+            <div class="user-info">
+                <h2 id="user-name">Загрузка...</h2>
+                <p>Добро пожаловать в Mini App</p>
+            </div>
+        </div>
+
+        <!-- Основная панель (Glassmorphism) -->
+        <div class="card">
+            <h3>🎬 Быстрый просмотр</h3>
+            <p>Откройте случайное видео или выберите любимую категорию в один клик прямо из приложения.</p>
+        </div>
+
+        <!-- Сетка разделов -->
+        <div class="grid">
+            <div class="card" onclick="openCategory('kids')" style="cursor: pointer;">
+                <h3>👶 Kids</h3>
+                <p>Безопасный контент</p>
+            </div>
+            <div class="card" onclick="openCategory('porno')" style="cursor: pointer;">
+                <h3>🔞 Porno</h3>
+                <p>18+ материалы</p>
+            </div>
+        </div>
+
+        <!-- Главная кнопка действия -->
+        <button class="btn" onclick="openRandom()">Случайное видео 🎲</button>
+    </div>
+
+    <script>
+        // Инициализация Telegram Web App
+        const tg = window.Telegram.WebApp;
+        tg.expand(); // Разворачиваем на весь экран
+
+        // Получаем данные пользователя из Telegram
+        const user = tg.initDataUnsafe?.user;
+        if (user) {
+            document.getElementById('user-name').innerText = user.first_name + (user.last_name ? ' ' + user.last_name : '');
+            document.getElementById('user-avatar').innerText = user.first_name.charAt(0).toUpperCase();
+        } else {
+            document.getElementById('user-name').innerText = "Гость";
+        }
+
+        function openCategory(cat) {
+            // Передаем данные обратно в бота или закрываем приложение с действием
+            tg.sendData(JSON.stringify({ action: "category", value: cat }));
+        }
+
+        function openRandom() {
+            tg.sendData(JSON.stringify({ action: "random" }));
+        }
+    </script>
+</body>
+</html>
