@@ -1,4 +1,0 @@
-aiogram
-fastapi
-uvicorn
-yt-dlp
